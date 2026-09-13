@@ -25,10 +25,10 @@
 
 <a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FBackchannel | Trendshift" width="250" height="55"/></a> <a href="https://www.producthunt.com/products/backchannel-4?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-backchannel-4" target="_blank" rel="noopener noreferrer"><img alt="Backchannel - The internet's commentary track. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1222392&amp;theme=light&amp;t=1786733251041"></a>
 
-1. Install a userscript manager:
-   - [Tampermonkey](https://www.tampermonkey.net/)
-   - [Violentmonkey](https://violentmonkey.github.io/)
-   - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887)
+1. Install a userscript plugin:
+   - [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Firefox, Safari)
+   - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Edge, Firefox)
+   - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887) (Safari)
 
 2. **[Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)**
 
