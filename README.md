@@ -35,7 +35,7 @@
 
 ## Usage
 1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
-2. You can visit https://twalichiewicz.github.io/Backchannel/ once you have the script installed to have a customizable front page you can bookmark.
+2. You can visit [backchnnl.app](https://backchnnl.app) once you have the script installed to have a customizable front page you can bookmark.
 3. You can directly upload to Hacker News and Reddit using the **↑** button.
 
 ## FAQ
