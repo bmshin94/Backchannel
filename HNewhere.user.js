@@ -376,8 +376,8 @@
 	const REPO_URL = "https://github.com/twalichiewicz/Backchannel";
 
 	// #region hnewhere-test-export
-	const START_PAGE_HOST = "twalichiewicz.github.io";
-	const START_PAGE_PATH = "/Backchannel";
+	const START_PAGE_HOST = "backchnnl.app";
+	const START_PAGE_PATH = "/";
 
 	function isStartPageAddress(href) {
 		try {
