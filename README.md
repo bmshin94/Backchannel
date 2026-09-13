@@ -28,7 +28,7 @@
 1. Install a userscript plugin:
    - [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Firefox, Safari)
    - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Edge, Firefox)
-   - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887) (Safari)
+   - [Userscripts](https://apps.apple.com/us/app/userscripts/id1463298887) (Safari)
 
 2. **[Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)**
 
