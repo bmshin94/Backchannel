@@ -60,11 +60,14 @@
 // @connect      www.tootfinder.ch
 // @connect      api.hypothes.is
 // @run-at       document-end
-// @noframes
 // ==/UserScript==
 
 (function () {
 	"use strict";
+
+	if (window.top !== window.self && window.name !== "backchannel-article") {
+		return;
+	}
 
 	const OLD_STORAGE = {
 		width: "hn_width",
@@ -378,6 +381,9 @@
 	// #region hnewhere-test-export
 	const START_PAGE_HOST = "backchnnl.app";
 	const START_PAGE_PATH = "/";
+	const START_PAGE_ORIGIN = "https://" + START_PAGE_HOST;
+	const APP_FRAME_NAME = "backchannel-article";
+	const APP_MESSAGE_VERSION = 1;
 
 	function isStartPageAddress(href) {
 		try {
@@ -4127,7 +4133,7 @@ ${
 	function noteDocumentRef(fingerprint = null) {
 		return fingerprint
 			? { kind: "pdf", id: String(fingerprint) }
-			: { kind: "url", id: normalizeURL(location.href) || location.href };
+			: { kind: "url", id: normalizeURL(pageHref()) || pageHref() };
 	}
 
 	function noteStorageKey(ref) {
@@ -4455,7 +4461,7 @@ button {
 				prefix: chosen.prefix,
 				suffix: chosen.suffix,
 				page: chosen.page,
-				url: location.href,
+				url: pageHref(),
 			},
 		]);
 
@@ -4773,7 +4779,7 @@ button {
 						Date.now().toString(36) +
 						Math.floor(Math.random() * 1e6).toString(36),
 					created: Math.floor(Date.now() / 1000),
-					url: location.href,
+					url: pageHref(),
 				},
 				parsed,
 			),
@@ -5057,7 +5063,7 @@ button {
 					notes,
 					previous,
 					noteDocumentRefForPage(),
-					{ url: location.href, title: pageTitle() },
+					{ url: pageHref(), title: pageTitle() },
 					Date.now(),
 				),
 			);
@@ -5646,7 +5652,7 @@ button {
 
 		wireRowWatchLink(
 			button,
-			{ url, title: title || document.title || "", site: hostLabel(url) },
+			{ url, title: title || pageDocumentTitle(), site: hostLabel(url) },
 			{ discussions },
 		);
 	}
@@ -6062,7 +6068,33 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
+	let appSubject = null;
+
+	function setAppSubject(subject) {
+		appSubject = subject?.url
+			? {
+					url: String(subject.url),
+					canonical: String(subject.canonical || ""),
+					title: String(subject.title || ""),
+				}
+			: null;
+	}
+
+	function pageHref() {
+		return appSubject ? appSubject.url : location.href;
+	}
+
+	function pageDocumentTitle() {
+		return appSubject ? appSubject.title : document.title || "";
+	}
+	// #endregion hnewhere-test-export
+
 	function canonicalHint() {
+		if (appSubject) {
+			return appSubject.canonical;
+		}
+
 		return (
 			document.querySelector('link[rel~="canonical" i]')?.href ||
 			document.querySelector('meta[property="og:url" i]')?.content ||
@@ -6071,12 +6103,12 @@ button {
 	}
 
 	function pageAddress() {
-		return canonicalPageURL(location.href, canonicalHint());
+		return canonicalPageURL(pageHref(), canonicalHint());
 	}
 
 	function pageAddresses() {
 		const here = pageAddress();
-		const original = archivedOriginalURL(location.href, canonicalHint());
+		const original = archivedOriginalURL(pageHref(), canonicalHint());
 
 		return original && !sameURL(original, here) ? [here, original] : [here];
 	}
@@ -7231,6 +7263,10 @@ button {
 
 	// #region hnewhere-test-export
 	function pageTitle(doc = document) {
+		if (doc === document && appSubject) {
+			return (appSubject.title || hostLabel(appSubject.url)).trim().replace(/\s+/g, " ");
+		}
+
 		const candidates = [
 			doc === document ? pdfTitle : null,
 			doc.querySelector('meta[property="og:title"]')?.content,
@@ -9745,7 +9781,7 @@ button {
 	async function saveCollectedNotes(page, notes) {
 		await saveNotes(notes, page);
 
-		if (sameURL(page.url || "", location.href)) {
+		if (sameURL(page.url || "", pageHref())) {
 			await reopenForNotes();
 		}
 	}
@@ -10218,37 +10254,35 @@ button {
 		return body;
 	}
 
-	async function renderQueueView(ui, list) {
+	async function renderQueueView(ui, list, { part = "" } = {}) {
 		const entries = sortQueue(await loadQueue());
 		const watching = await loadWatches();
-		const watchFor = (entry) =>
-			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+		const { queued: rest, watched, watchFor } = splitQueueEntries(entries, watching);
+		const kept = sortWatchedEntries(watched, watchFor);
 		const watchKeys = new Set(watching.map((entry) => entry.key));
+		const showQueued = part !== "watching";
+		const showWatching = part !== "queued";
+		const reload = () => renderQueueView(ui, list, { part });
+		let rank = 0;
 
 		list.replaceChildren();
 
-		if (!entries.length) {
+		if (!(showQueued ? rest.length : 0) && !(showWatching ? kept.length : 0)) {
 			const empty = document.createElement("div");
 			empty.className = "browse-empty";
 			empty.textContent =
-				"Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
+				part === "watching"
+					? "Nothing watched yet. Use watch on any discussion to hear when it grows."
+					: "Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
 			list.appendChild(empty);
 			return;
 		}
 
-		const kept = sortWatchedEntries(
-			entries.filter((entry) => watchFor(entry)),
-			watchFor,
-		);
-		const rest = entries.filter((entry) => !watchFor(entry));
-		const reload = () => renderQueueView(ui, list);
-		let rank = 0;
-
-		if (kept.length && rest.length) {
+		if (showQueued && showWatching && kept.length && rest.length) {
 			subhead(list, "queued");
 		}
 
-		for (const entry of rest) {
+		for (const entry of showQueued ? rest : []) {
 			const row = renderBrowseRow(entry, list, (rank += 1), {
 				inQueue: true,
 				watchable: true,
@@ -10259,11 +10293,11 @@ button {
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		}
 
-		if (kept.length) {
+		if (showQueued && showWatching && kept.length) {
 			subhead(list, "watching");
 		}
 
-		for (const entry of kept) {
+		for (const entry of showWatching ? kept : []) {
 			const state = watchFor(entry);
 			const fresh = watchIsFresh(state);
 			const row = renderBrowseRow(entry, list, 0, {
@@ -10285,11 +10319,11 @@ button {
 
 		refreshQueueEntries(entries).then((refreshed) => {
 			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
-				renderQueueView(ui, list).catch(console.error);
+				renderQueueView(ui, list, { part }).catch(console.error);
 			}
 		});
 
-		if (entries.some((entry) => entry.readAt && !watchFor(entry))) {
+		if (showQueued && entries.some((entry) => entry.readAt && !watchFor(entry))) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
@@ -10309,7 +10343,7 @@ button {
 					return clearReadFromQueue(queued, keep);
 				});
 
-				await renderQueueView(ui, list);
+				await renderQueueView(ui, list, { part });
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
 			};
@@ -18465,7 +18499,7 @@ ${settingsPanelHTML()}
 			: favoriteButtonHTML({
 					key: normalizeURL(pageURL) || "",
 					url: pageURL,
-					title: page || document.title || "",
+					title: page || pageDocumentTitle(),
 					site: hostLabel(pageURL),
 					kind: "discussion",
 				});
@@ -23647,6 +23681,695 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	// -------------------------
+	// Reader app
+	// -------------------------
+
+	function appFrameMessageVerdict(data, origin, knownOrigin = null) {
+		if (!data || typeof data !== "object" || data.bc !== APP_MESSAGE_VERSION) {
+			return null;
+		}
+
+		if (data.type === "hi") {
+			try {
+				return new URL(String(data.url || "")).origin === origin ? "hi" : null;
+			} catch {
+				return null;
+			}
+		}
+
+		return knownOrigin && origin === knownOrigin ? "ok" : null;
+	}
+
+	function frameLinkTarget(event, here = location.href) {
+		if (
+			event.defaultPrevented ||
+			event.button !== 0 ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey ||
+			event.altKey
+		) {
+			return null;
+		}
+
+		const link = event.target?.closest?.("a[href]");
+
+		if (!link || link.hasAttribute("download")) {
+			return null;
+		}
+
+		const target = (link.getAttribute("target") || "").trim().toLowerCase();
+
+		if (target && target !== "_self") {
+			return null;
+		}
+
+		let url;
+		let current;
+
+		try {
+			url = new URL(link.getAttribute("href"), here);
+			current = new URL(here);
+		} catch {
+			return null;
+		}
+
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			return null;
+		}
+
+		if (
+			url.origin === current.origin &&
+			url.pathname === current.pathname &&
+			url.search === current.search
+		) {
+			return null;
+		}
+
+		return url.href;
+	}
+
+	function frameVisibility() {
+		const shown = (element) => {
+			if (!element) {
+				return false;
+			}
+
+			const style = getComputedStyle(element);
+
+			return style.display !== "none" && style.visibility !== "hidden";
+		};
+
+		return (
+			shown(document.documentElement) &&
+			shown(document.body) &&
+			(document.body.innerText || "").trim().length > 0
+		);
+	}
+
+	let frameAgentActive = false;
+	let frameGreeted = false;
+
+	function postToApp(message) {
+		if (!frameGreeted) {
+			return;
+		}
+
+		try {
+			window.parent.postMessage(
+				{ bc: APP_MESSAGE_VERSION, ...message },
+				START_PAGE_ORIGIN,
+			);
+		} catch {
+		}
+	}
+
+	function installFrameAgent() {
+		frameAgentActive = true;
+
+		window.addEventListener("message", (event) => {
+			if (event.source !== window.parent || event.origin !== START_PAGE_ORIGIN) {
+				return;
+			}
+
+			const data = event.data;
+
+			if (!data || typeof data !== "object" || data.bc !== APP_MESSAGE_VERSION) {
+				return;
+			}
+
+			if (data.type === "hello") {
+				frameGreeted = true;
+				postToApp({
+					type: "hi",
+					url: location.href,
+					canonical: canonicalHint(),
+					title: pageTitle(),
+					visible: frameVisibility(),
+				});
+			}
+		});
+
+		document.addEventListener(
+			"click",
+			(event) => {
+				if (!frameGreeted) {
+					return;
+				}
+
+				const url = frameLinkTarget(event);
+
+				if (url) {
+					event.preventDefault();
+					postToApp({ type: "open", url });
+				}
+			},
+			true,
+		);
+	}
+
+	const APP_HELLO_MS = 200;
+	const APP_LOAD_GRACE_MS = 600;
+	const APP_FRAME_CAP_MS = 8000;
+	const READER_MIN_CHARS = 400;
+
+	function parseResponseHeaders(text) {
+		const headers = new Map();
+
+		for (const line of String(text || "").split(/\r?\n/)) {
+			const at = line.indexOf(":");
+
+			if (at < 1) {
+				continue;
+			}
+
+			const name = line.slice(0, at).trim().toLowerCase();
+			const value = line.slice(at + 1).trim();
+
+			headers.set(name, headers.has(name) ? headers.get(name) + "\n" + value : value);
+		}
+
+		return headers;
+	}
+
+	function cspSourceAdmits(source, parentOrigin) {
+		const expression = String(source || "").trim().toLowerCase();
+		let parent;
+
+		try {
+			parent = new URL(parentOrigin);
+		} catch {
+			return false;
+		}
+
+		if (!expression || expression.startsWith("'")) {
+			return false;
+		}
+
+		if (expression === "*") {
+			return parent.protocol === "https:" || parent.protocol === "http:";
+		}
+
+		if (/^[a-z][a-z0-9+.-]*:$/.test(expression)) {
+			return (
+				expression === parent.protocol ||
+				(expression === "http:" && parent.protocol === "https:")
+			);
+		}
+
+		const match =
+			/^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*|\*\.[^:/]+|[^:/*]+)(?::(\d+|\*))?(?:\/.*)?$/.exec(
+				expression,
+			);
+
+		if (!match) {
+			return false;
+		}
+
+		const [, scheme, host, port] = match;
+
+		if (
+			scheme &&
+			scheme + ":" !== parent.protocol &&
+			!(scheme === "http" && parent.protocol === "https:")
+		) {
+			return false;
+		}
+
+		const hostMatches =
+			host === "*" ||
+			(host.startsWith("*.")
+				? parent.hostname.endsWith(host.slice(1))
+				: parent.hostname === host);
+
+		if (!hostMatches) {
+			return false;
+		}
+
+		const parentPort = parent.port || (parent.protocol === "https:" ? "443" : "80");
+
+		return !port || port === "*" || port === parentPort;
+	}
+
+	function frameAncestorsAdmit(sources, parentOrigin) {
+		const list = (sources || []).map((source) => String(source).trim()).filter(Boolean);
+
+		if (!list.length) {
+			return false;
+		}
+
+		if (list.length === 1 && list[0].toLowerCase() === "'none'") {
+			return false;
+		}
+
+		return list.some((source) => cspSourceAdmits(source, parentOrigin));
+	}
+
+	function framingRefused(headerText, parentOrigin = START_PAGE_ORIGIN) {
+		const headers = parseResponseHeaders(headerText);
+		const policies = (headers.get("content-security-policy") || "")
+			.split(/[\n,]/)
+			.map((policy) => policy.trim())
+			.filter(Boolean);
+		let governed = false;
+
+		for (const policy of policies) {
+			const directive = policy
+				.split(";")
+				.map((part) => part.trim().split(/\s+/))
+				.find(([name]) => name?.toLowerCase() === "frame-ancestors");
+
+			if (!directive) {
+				continue;
+			}
+
+			governed = true;
+
+			if (!frameAncestorsAdmit(directive.slice(1), parentOrigin)) {
+				return true;
+			}
+		}
+
+		if (governed) {
+			return false;
+		}
+
+		return (headers.get("x-frame-options") || "")
+			.split(/[\n,]/)
+			.map((value) => value.trim().toLowerCase())
+			.some((value) => value === "deny" || value === "sameorigin");
+	}
+
+	function articleLoadPlan({
+		http = false,
+		reply = null,
+		loaded = false,
+		sinceLoad = 0,
+		sinceStart = 0,
+		probe = null,
+	} = {}) {
+		if (reply?.visible) {
+			return "frame-agent";
+		}
+
+		if (probe) {
+			const readable = (probe.readerChars || 0) >= READER_MIN_CHARS;
+
+			if (http || reply || (probe.ok && probe.refused)) {
+				return readable ? "reader" : "card";
+			}
+
+			return "frame";
+		}
+
+		if (reply || http) {
+			return "probe";
+		}
+
+		if ((loaded && sinceLoad >= APP_LOAD_GRACE_MS) || sinceStart >= APP_FRAME_CAP_MS) {
+			return "probe";
+		}
+
+		return "wait";
+	}
+
+	const READER_MAX_BYTES = 3 * 1024 * 1024;
+
+	const READER_KEEP_TAGS = new Set(
+		"P H1 H2 H3 H4 H5 H6 A IMG FIGURE FIGCAPTION UL OL LI DL DT DD BLOCKQUOTE PRE CODE KBD SAMP EM STRONG B I U S SMALL SUB SUP MARK BR HR TABLE CAPTION THEAD TBODY TFOOT TR TH TD TIME ABBR Q CITE DEL INS".split(
+			" ",
+		),
+	);
+
+	const READER_DROP_TAGS = new Set(
+		"SCRIPT STYLE NOSCRIPT TEMPLATE IFRAME FRAME FRAMESET OBJECT EMBED APPLET FORM INPUT BUTTON SELECT TEXTAREA OPTION LABEL NAV ASIDE FOOTER SVG CANVAS VIDEO AUDIO SOURCE TRACK MAP AREA DIALOG MENU LINK META HEAD TITLE BASE MATH".split(
+			" ",
+		),
+	);
+
+	const READER_BLOCK_WRAPPERS = new Set(
+		"DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS SUMMARY HGROUP".split(" "),
+	);
+
+	const READER_BLOCK_TAGS = new Set(
+		"P H1 H2 H3 H4 H5 H6 FIGURE UL OL DL BLOCKQUOTE PRE TABLE HR DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS HGROUP".split(
+			" ",
+		),
+	);
+
+	function readerURL(value, base) {
+		try {
+			const url = new URL(String(value || "").trim(), base);
+
+			return url.protocol === "http:" || url.protocol === "https:" ? url : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function firstSrcsetURL(srcset) {
+		return (
+			String(srcset || "")
+				.split(",")
+				.map((part) => part.trim().split(/\s+/)[0])
+				.find(Boolean) || ""
+		);
+	}
+
+	function readerImageSource(image, base) {
+		const candidates = [
+			image.getAttribute("data-src"),
+			image.getAttribute("data-original"),
+			image.getAttribute("data-lazy-src"),
+			image.getAttribute("src"),
+			firstSrcsetURL(image.getAttribute("srcset") || image.getAttribute("data-srcset")),
+		];
+
+		for (const candidate of candidates) {
+			if (!candidate || /^data:/i.test(candidate.trim())) {
+				continue;
+			}
+
+			const url = readerURL(candidate, base);
+
+			if (url) {
+				url.protocol = "https:";
+				return url.href;
+			}
+		}
+
+		return "";
+	}
+
+	function readerWrapperHoldsText(element) {
+		return [...element.childNodes].some((child) => {
+			if (child.nodeType === Node.TEXT_NODE) {
+				return Boolean(child.nodeValue.trim());
+			}
+
+			if (child.nodeType !== Node.ELEMENT_NODE) {
+				return false;
+			}
+
+			const tag = child.nodeName.toUpperCase();
+
+			return !READER_BLOCK_TAGS.has(tag) && !READER_DROP_TAGS.has(tag);
+		});
+	}
+
+	function readerElementPlan(element, base) {
+		const tag = element.nodeName.toUpperCase();
+
+		if (
+			READER_DROP_TAGS.has(tag) ||
+			element.hasAttribute("hidden") ||
+			element.getAttribute("aria-hidden") === "true"
+		) {
+			return { drop: true };
+		}
+
+		if (READER_BLOCK_WRAPPERS.has(tag)) {
+			return readerWrapperHoldsText(element) ? { paragraph: true } : { unwrap: true };
+		}
+
+		if (!READER_KEEP_TAGS.has(tag)) {
+			return { unwrap: true };
+		}
+
+		if (tag === "A") {
+			const url = readerURL(element.getAttribute("href"), base);
+
+			return url
+				? { attributes: [["href", url.href], ["rel", "noopener noreferrer"]] }
+				: { unwrap: true };
+		}
+
+		if (tag === "IMG") {
+			const src = readerImageSource(element, base);
+
+			if (!src) {
+				return { drop: true };
+			}
+
+			const attributes = [
+				["src", src],
+				["loading", "lazy"],
+				["referrerpolicy", "no-referrer"],
+			];
+			const alt = element.getAttribute("alt");
+
+			if (alt) {
+				attributes.push(["alt", alt]);
+			}
+
+			return { attributes };
+		}
+
+		if (tag === "TD" || tag === "TH") {
+			return {
+				attributes: ["colspan", "rowspan"]
+					.filter((name) => /^\d{1,3}$/.test(element.getAttribute(name) || ""))
+					.map((name) => [name, element.getAttribute(name)]),
+			};
+		}
+
+		if (tag === "OL" && /^-?\d{1,6}$/.test(element.getAttribute("start") || "")) {
+			return { attributes: [["start", element.getAttribute("start")]] };
+		}
+
+		return { attributes: [] };
+	}
+
+	function cleanReaderTree(node, base, inert) {
+		for (const child of [...node.childNodes]) {
+			if (child.nodeType === Node.COMMENT_NODE) {
+				child.remove();
+				continue;
+			}
+
+			if (child.nodeType !== Node.ELEMENT_NODE) {
+				continue;
+			}
+
+			const plan = readerElementPlan(child, base);
+
+			if (plan.drop) {
+				child.remove();
+				continue;
+			}
+
+			if (plan.unwrap || plan.paragraph) {
+				const holder = plan.paragraph
+					? inert.createElement("p")
+					: inert.createDocumentFragment();
+
+				while (child.firstChild) {
+					holder.appendChild(child.firstChild);
+				}
+
+				cleanReaderTree(holder, base, inert);
+				child.replaceWith(holder);
+				continue;
+			}
+
+			for (const attribute of [...child.attributes]) {
+				child.removeAttribute(attribute.name);
+			}
+
+			for (const [name, value] of plan.attributes) {
+				child.setAttribute(name, value);
+			}
+
+			cleanReaderTree(child, base, inert);
+		}
+	}
+
+	function readerTitle(doc, url) {
+		for (const candidate of [
+			doc.querySelector('meta[property="og:title"]')?.getAttribute("content"),
+			doc.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
+			doc.querySelector("h1")?.textContent,
+			doc.title,
+		]) {
+			const title = String(candidate || "").trim().replace(/\s+/g, " ");
+
+			if (title) {
+				return title;
+			}
+		}
+
+		return hostLabel(url);
+	}
+
+	function readerRoot(doc) {
+		const length = (element) =>
+			(element?.textContent || "").replace(/\s+/g, " ").trim().length;
+
+		for (const [candidate, floor] of [
+			[doc.querySelector("main article"), 800],
+			[doc.querySelector("article"), 800],
+			[doc.querySelector("main"), READER_MIN_CHARS],
+			[doc.querySelector("[role='main']"), READER_MIN_CHARS],
+		]) {
+			if (candidate && length(candidate) >= floor) {
+				return candidate;
+			}
+		}
+
+		return doc.body;
+	}
+
+	function extractReaderArticle(html, url) {
+		const text = String(html || "");
+
+		if (!text || text.length > READER_MAX_BYTES) {
+			return null;
+		}
+
+		const doc = new DOMParser().parseFromString(text, "text/html");
+
+		for (const junk of doc.querySelectorAll("script, style, noscript, template")) {
+			junk.remove();
+		}
+
+		const root = readerRoot(doc);
+
+		if (!root) {
+			return null;
+		}
+
+		const title = readerTitle(doc, url);
+		const byline = String(
+			doc.querySelector('meta[name="author"]')?.getAttribute("content") || "",
+		).trim();
+		const content = doc.createElement("div");
+
+		content.append(...root.childNodes);
+		cleanReaderTree(content, url, doc);
+
+		const lead = content.querySelector("h1, h2");
+
+		if (lead && lead.textContent.trim().replace(/\s+/g, " ") === title) {
+			lead.remove();
+		}
+
+		return {
+			title,
+			byline,
+			site: hostLabel(url),
+			content,
+			chars: (content.textContent || "").replace(/\s+/g, " ").trim().length,
+		};
+	}
+
+	function rowDiscussionKeys(row) {
+		return [row?.story, ...(row?.also || [])]
+			.filter(
+				(story) =>
+					story?.source && story.id !== undefined && story.id !== null && story.id !== "",
+			)
+			.map((story) => sourceKey(story.source, story.id));
+	}
+
+	function rowIsUnread(row, seen) {
+		return !rowDiscussionKeys(row).some((key) => Number(seen?.[key]) > 0);
+	}
+
+	function rowCarriesSource(row, sourceId) {
+		return [row?.story, ...(row?.also || [])].some((story) => story?.source === sourceId);
+	}
+
+	function appViewRows(rows, view, seen) {
+		if (view === "unread") {
+			return rows.filter((row) => rowIsUnread(row, seen));
+		}
+
+		if (String(view).startsWith("source:")) {
+			const sourceId = view.slice("source:".length);
+
+			return rows.filter((row) => rowCarriesSource(row, sourceId));
+		}
+
+		return rows;
+	}
+
+	function appViewCounts(rows, seen, sourceIds) {
+		const counts = { unread: 0, all: rows.length, sources: {} };
+
+		for (const id of sourceIds) {
+			counts.sources[id] = 0;
+		}
+
+		for (const row of rows) {
+			if (!rowIsUnread(row, seen)) {
+				continue;
+			}
+
+			counts.unread += 1;
+
+			for (const id of sourceIds) {
+				if (rowCarriesSource(row, id)) {
+					counts.sources[id] += 1;
+				}
+			}
+		}
+
+		return counts;
+	}
+
+	function markKeysSeen(seen, keys, now) {
+		const next = { ...seen };
+		const previous = {};
+
+		for (const key of keys) {
+			previous[key] = seen[key];
+			next[key] = now;
+		}
+
+		return { next, previous };
+	}
+
+	function restoreSeen(seen, previous) {
+		const next = { ...seen };
+
+		for (const [key, value] of Object.entries(previous)) {
+			if (value === undefined) {
+				delete next[key];
+			} else {
+				next[key] = value;
+			}
+		}
+
+		return next;
+	}
+
+	async function markManySeen(keys) {
+		const seen = (await load(STORAGE.seen, {})) || {};
+		const { next, previous } = markKeysSeen(seen, keys, Math.floor(Date.now() / 1000));
+
+		await save(STORAGE.seen, next);
+
+		return previous;
+	}
+
+	async function restoreManySeen(previous) {
+		const seen = (await load(STORAGE.seen, {})) || {};
+
+		await save(STORAGE.seen, restoreSeen(seen, previous));
+	}
+
+	function splitQueueEntries(entries, watching) {
+		const watchFor = (entry) =>
+			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+
+		return {
+			queued: entries.filter((entry) => !watchFor(entry)),
+			watched: entries.filter((entry) => watchFor(entry)),
+			watchFor,
+		};
+	}
+
+	// -------------------------
 	// Soft navigation
 	// -------------------------
 
@@ -23940,5 +24663,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		stopButtonSpinner(await createCollapsedButton(storyRefs));
 	}
 
-	init().catch(console.error);
+	if (window.top === window.self) {
+		init().catch(console.error);
+	} else {
+		installFrameAgent();
+	}
 })();
