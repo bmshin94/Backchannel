@@ -205,6 +205,8 @@
 		hiddenStories: "HNewhere:hidden_stories",
 		zoomBySite: "HNewhere:zoom_by_site",
 		appListWidth: "HNewhere:app_list_width",
+		appPanes: "HNewhere:app_panes",
+		appZoom: "HNewhere:app_zoom",
 	};
 
 	// #region hnewhere-test-export
@@ -6710,6 +6712,10 @@ button {
 
 		host.classList.toggle(DARK_CLASS, dark);
 
+		if (host.hasAttribute("data-hnewhere-app")) {
+			document.documentElement.toggleAttribute("data-backchannel-dark", dark);
+		}
+
 		const properties = {
 			"--accent": null,
 			"--accent-rgb": null,
@@ -10069,7 +10075,7 @@ button {
 		const message = document.createElement("div");
 		message.className = "browse-empty no-discussion";
 		message.textContent = appState
-			? "No discussion found for this story yet."
+			? "No discussion found for this article yet."
 			: "No discussion found for this page yet. Minimize to submit it, or read something else.";
 
 		body.appendChild(message);
@@ -10312,7 +10318,7 @@ button {
 			empty.textContent =
 				part === "watching"
 					? "Nothing watched yet. Use watch on any discussion to hear when it grows."
-					: "Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
+					: "Nothing queued yet. Use queue on any article, here or on Hacker News, to read it later.";
 			list.appendChild(empty);
 			return;
 		}
@@ -13411,6 +13417,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
+${title ? `<span id="app-discussion-meta" class="app-discussion-meta"></span>` : ""}
 <button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
 <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
 <path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>
@@ -15263,6 +15270,11 @@ ${SUBMIT_FORM_CSS}
 	transform:scaleY(0);
 }
 
+.comment:has(> .comment-layout > .comment-main > .comment-content.hidden)
+	> .comment-layout > .comment-vote-slot > .vote-controls {
+	display:none;
+}
+
 .comment:has(> .comment-layout > .comment-main > .comment-content.hidden) {
 	margin-top:6px;
 }
@@ -15545,6 +15557,10 @@ blockquote.comment-quote-redundant {
 .compose-box {
 	position:relative;
 	margin:15px 0 15px 8px;
+}
+
+.compose-dock-close {
+	display:none;
 }
 
 .compose-dock {
@@ -15939,7 +15955,7 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, back: appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
-<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
+<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${appMode ? "" : settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
@@ -16464,6 +16480,17 @@ ${appMode ? "" : settingsPanelHTML()}
 			event.stopPropagation();
 			return docked ? undock() : dockBox();
 		};
+
+		const close = ui.shadow.querySelector("#compose-dock-close");
+
+		if (close) {
+			close.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				undock();
+				control.focus();
+			};
+		}
 
 		dock.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
@@ -18593,6 +18620,7 @@ ${appMode ? "" : settingsPanelHTML()}
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
 		if (!disclosure) {
+			paintAppDiscussionMeta(wrapper, stories, total);
 			container.appendChild(wrapper);
 			mountSortRow(container, sort, options);
 
@@ -18648,11 +18676,83 @@ ${appMode ? "" : settingsPanelHTML()}
 			}
 		});
 
+		paintAppDiscussionMeta(wrapper, stories, total);
 		container.appendChild(wrapper);
 
 		mountSortRow(container, sort, options);
 
 		return wrapper;
+	}
+
+	function appDiscussionStatus() {
+		if (!appState.discussionStatus) {
+			const status = document.createElement("div");
+
+			status.id = "app-discussion-status";
+			status.className = "app-discussion-status";
+			appState.discussionStatus = status;
+		}
+
+		return appState.discussionStatus;
+	}
+
+	function paintAppDiscussionMeta(wrapper, stories, total) {
+		const shadow = appState?.ui.shadow;
+		const slot = shadow?.querySelector("#app-discussion-meta");
+
+		if (!slot) {
+			return;
+		}
+
+		let anchor = wrapper.querySelector(".source-menu-anchor");
+		let disclosure;
+		let menu;
+
+		if (anchor) {
+			disclosure = anchor.querySelector(".page-header-disclosure");
+			menu = anchor.querySelector(".source-menu");
+			disclosure.textContent = pluralize(stories.length, "discussion");
+		} else {
+			anchor = document.createElement("span");
+			anchor.className = "source-menu-anchor";
+			anchor.innerHTML = `<button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu"></button><div id="source-menu" class="source-menu hidden"></div>`;
+			disclosure = anchor.querySelector(".page-header-disclosure");
+			menu = anchor.querySelector(".source-menu");
+			disclosure.textContent = pluralize(total, "comment");
+			disclosure.onclick = () => {
+				const open = menu.classList.contains("hidden");
+
+				menu.classList.toggle("hidden", !open);
+				disclosure.setAttribute("aria-expanded", open ? "true" : "false");
+			};
+			menu.addEventListener("keydown", (event) => {
+				if (event.key === "Escape") {
+					closeSourceMenu(shadow);
+					disclosure.focus();
+				}
+			});
+		}
+
+		const status = appDiscussionStatus();
+		const everything = menu.querySelector(".source-menu-option:not([data-discussion-key])");
+
+		status.classList.add("settings-option-hint");
+
+		if (everything) {
+			everything.after(status);
+		} else {
+			menu.prepend(status);
+		}
+
+		if (stories.length > 1) {
+			const lead = document.createElement("span");
+
+			lead.className = "app-discussion-total";
+			lead.textContent = `${pluralize(total, "comment")} across `;
+			slot.replaceChildren(lead, anchor);
+		} else {
+			slot.replaceChildren(anchor);
+		}
 	}
 
 	function syncSubmissionDetails() {
@@ -23785,6 +23885,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	const APP_LIST_MIN_WIDTH = 220;
 	const APP_LIST_MAX_WIDTH = 480;
 	const APP_PULL_TRIGGER = 56;
+	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
 
 	const APP_CSS = `
@@ -23792,6 +23893,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	display:block;
 	position:absolute;
 	inset:0;
+	box-sizing:border-box;
+	padding:9px 9px 9px 0;
+	background:var(--rail-bg);
 	--rail-bg:var(--header-bg);
 	--rail-fg:var(--header-text);
 	--open-row:rgba(var(--accent-rgb), .13);
@@ -23806,13 +23910,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 #app {
 	all:initial;
 	position:relative;
+	overscroll-behavior:none;
 	display:grid;
 	grid-template-columns:44px var(--app-list-width, 300px) minmax(0, 1fr) auto;
 	grid-template-rows:minmax(0, 1fr);
 	width:100%;
 	height:100%;
 	overflow:hidden;
-	background:var(--bg);
+	border-radius:12px;
+	background:var(--rail-bg);
 	color:var(--text);
 	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 	font-size:13px;
@@ -23831,10 +23937,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	align-items:center;
 	gap:6px;
 	min-height:0;
-	padding:10px 0;
-	overflow-x:hidden;
-	overflow-y:auto;
-	overscroll-behavior:contain;
+	padding:0;
+	overflow:visible;
 	background:var(--rail-bg);
 }
 
@@ -23891,11 +23995,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 .rail-badge {
 	position:absolute;
-	top:-4px;
+	top:0;
 	right:-5px;
 	min-width:15px;
 	height:15px;
-	padding:0 4px;
+	padding:0 3px;
 	box-sizing:border-box;
 	border-radius:8px;
 	background:var(--rail-fg);
@@ -23982,6 +24086,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 #app-list {
 	position:relative;
+	border-radius:12px 0 0 12px;
+	overflow:hidden;
 	display:flex;
 	flex-direction:column;
 	min-width:0;
@@ -24009,6 +24115,152 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 .app-pane-action {
 	margin-left:auto;
+}
+
+.app-pane-middle {
+	flex:1 1 auto;
+	display:flex;
+	align-items:baseline;
+	justify-content:center;
+	gap:8px;
+	min-width:0;
+	overflow:hidden;
+}
+
+.app-article-actions {
+	display:inline-flex;
+	align-items:baseline;
+	gap:4px;
+}
+
+.app-article-actions[hidden] {
+	display:none;
+}
+
+.app-article-actions .item-action-link,
+.app-head-sep {
+	font-size:10px;
+}
+
+.app-head-sep {
+	color:var(--meta);
+	opacity:.6;
+}
+
+.app-zoom {
+	display:inline-flex;
+	align-items:center;
+	gap:6px;
+}
+
+.app-zoom[hidden] {
+	display:none !important;
+}
+
+.app-zoom button {
+	border:0;
+	padding:0 2px;
+	background:none;
+	color:var(--meta);
+	font:inherit;
+	font-size:13px;
+	line-height:1;
+	cursor:pointer;
+}
+
+.app-zoom button:disabled {
+	opacity:.4;
+	cursor:default;
+}
+
+@media (hover: hover) {
+	.app-zoom button:not(:disabled):hover {
+		color:var(--text);
+	}
+}
+
+#app-zoom-level {
+	min-width:34px;
+	color:var(--meta);
+	font-size:10px;
+	text-align:center;
+}
+
+.app-pane-toggle {
+	flex:0 0 auto;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:24px;
+	height:24px;
+	padding:0;
+	border:0;
+	border-radius:5px;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.app-pane-toggle:hover {
+		background:var(--hover-tint);
+		color:var(--text);
+	}
+}
+
+.app-pane-toggle .pane-fill {
+	opacity:.25;
+}
+
+.app-pane-toggle[aria-pressed="false"] .pane-fill {
+	opacity:1;
+}
+
+.app-wide-only {
+	display:inline-flex;
+}
+
+#app.list-hidden #app-list,
+#app.discussion-hidden #panel.app-docked {
+	display:none;
+}
+
+#app.list-hidden #app-article {
+	border-radius:12px 0 0 12px;
+	overflow:hidden;
+}
+
+#app.list-moving #app-list,
+#app.discussion-moving #panel.app-docked {
+	position:absolute;
+	top:0;
+	bottom:0;
+	z-index:6;
+	width:var(--pane-width) !important;
+	max-width:none;
+	height:auto;
+	transition:transform .22s ease;
+}
+
+#app.list-moving #app-list {
+	left:44px;
+}
+
+#app.list-moving #app-rail {
+	position:relative;
+	z-index:7;
+}
+
+#app.discussion-moving #panel.app-docked {
+	right:0;
+}
+
+#app.list-out #app-list {
+	transform:translateX(calc(-100% - 44px));
+}
+
+#app.discussion-out #panel.app-docked {
+	transform:translateX(100%);
 }
 
 .app-pane-actions {
@@ -24073,6 +24325,19 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	border-bottom:1px solid var(--border-soft);
 }
 
+#app-list-body > .browse-empty:only-child {
+	position:absolute;
+	inset:36px 0 0;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	max-width:none;
+	margin:0;
+	padding:24px;
+	box-sizing:border-box;
+	text-align:center;
+}
+
 #app-list-body .browse-subhead,
 #app-list-body .browse-empty,
 #app-list-body .browse-skeleton,
@@ -24107,7 +24372,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 .app-list-resize {
 	position:absolute;
 	top:0;
-	right:-4px;
+	right:0;
 	bottom:0;
 	z-index:3;
 	width:8px;
@@ -24127,7 +24392,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 @media (pointer: coarse) {
 	.app-list-resize {
-		right:-10px;
+		right:0;
 		width:20px;
 		display:flex;
 		align-items:center;
@@ -24157,16 +24422,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	background:var(--article-bg);
 }
 
-#app-article-site {
-	flex:0 0 auto;
-}
-
-#app-article-title {
-	min-width:0;
-	overflow:hidden;
-	text-overflow:ellipsis;
-}
-
 .app-article-body {
 	position:relative;
 	flex:1 1 auto;
@@ -24175,11 +24430,14 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 .app-article-frame {
 	position:absolute;
-	inset:0;
-	width:100%;
-	height:100%;
+	left:0;
+	top:0;
+	width:calc(100% / var(--app-zoom, 1));
+	height:calc(100% / var(--app-zoom, 1));
 	border:0;
 	background:#fff;
+	transform:scale(var(--app-zoom, 1));
+	transform-origin:0 0;
 }
 
 .app-reader-scroll {
@@ -24222,6 +24480,261 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	padding-top:0;
 	padding-bottom:0;
 	border-bottom:1px solid var(--border-soft);
+}
+
+#panel.app-docked .toast-layer {
+	position:fixed;
+	left:0;
+	right:0;
+	bottom:0;
+	height:0;
+	z-index:40;
+}
+
+#panel.app-docked .toast {
+	top:auto;
+	bottom:16px;
+	transform:translate(-50%,14px);
+}
+
+#panel.app-docked .toast.is-showing {
+	transform:translate(-50%,0);
+}
+
+.app-discussion-meta {
+	display:inline-flex;
+	align-items:center;
+	margin-right:4px;
+	font-weight:normal;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-anchor {
+	position:relative;
+}
+
+#panel.app-docked .app-discussion-meta .page-header-disclosure {
+	width:auto;
+	height:auto;
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--meta);
+	font:inherit;
+	font-size:10px;
+	font-weight:normal;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	cursor:pointer;
+}
+
+.app-discussion-total {
+	color:var(--meta);
+	font-size:10px;
+	font-weight:normal;
+	white-space:pre;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu {
+	left:auto;
+	right:0;
+	width:240px;
+	max-width:none;
+	box-sizing:border-box;
+	overflow-x:hidden;
+	padding:10px 10px 13px;
+	color:var(--surface-text);
+	font-size:12px;
+	font-weight:normal;
+	line-height:1.35;
+	text-align:left;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-option {
+	gap:8px;
+	padding:0;
+	border-radius:0;
+	font-size:12px;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-option + .source-menu-option {
+	margin-top:8px;
+}
+
+@media (hover: hover) {
+	#panel.app-docked .app-discussion-meta .source-menu-option:hover {
+		background:none;
+	}
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"] {
+	display:inline-grid;
+	place-content:center;
+	width:15px;
+	height:15px;
+	border:1px solid var(--help-border);
+	background:var(--help-bg);
+	box-shadow:none;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"]:checked {
+	border-color:transparent;
+	background:#0b63ce;
+	background:AccentColor;
+	box-shadow:none;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"]:checked::after {
+	content:"";
+	width:5px;
+	height:5px;
+	border-radius:50%;
+	background:#fff;
+}
+
+#panel.app-docked .app-discussion-meta .choice-label {
+	flex:1 1 auto;
+	min-width:0;
+}
+
+#panel.app-docked .app-discussion-meta .choice-group + .choice-group {
+	margin-top:10px;
+	padding-top:10px;
+}
+
+#panel.app-docked .app-discussion-meta .choice-head,
+#panel.app-docked .app-discussion-meta .choice-sub-head {
+	margin:0 0 4px;
+	color:var(--muted);
+	font-size:11px;
+	font-weight:normal;
+	letter-spacing:0;
+	text-transform:none;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu button {
+	display:inline;
+	width:auto;
+	height:auto;
+	border-radius:0;
+	background:none;
+	color:inherit;
+	font-size:inherit;
+}
+
+.app-discussion-status:empty {
+	display:none;
+}
+
+#panel.app-docked .app-discussion-meta .app-discussion-status {
+	max-height:none;
+	margin:3px 0 0 23px;
+	padding:0;
+	border:0;
+	color:var(--muted);
+	font-size:11px;
+	white-space:normal;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu > .app-discussion-status:only-child {
+	margin:0;
+}
+
+#panel.app-docked #header-subtitle,
+#panel.app-docked .page-header-title,
+#panel.app-docked .page-header-meta {
+	display:none;
+}
+
+#panel.app-docked #comment-toggle {
+	position:absolute;
+	right:6px;
+	bottom:6px;
+	z-index:8;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:32px;
+	height:32px;
+	padding:0;
+	border:0;
+	border-radius:8px;
+	background:var(--accent);
+	color:#fff;
+	box-shadow:0 6px 18px rgba(0,0,0,.24);
+	cursor:pointer;
+}
+
+#panel.app-docked #comment-toggle[hidden] {
+	display:none;
+}
+
+#panel.app-docked #comment-toggle.is-open {
+	display:none;
+}
+
+#panel.app-docked .compose-dock {
+	top:auto;
+	left:auto;
+	right:6px;
+	bottom:6px;
+	width:calc(100% - 12px);
+	max-width:520px;
+	transform:none;
+	transform-origin:100% 100%;
+	box-shadow:0 10px 28px rgba(0,0,0,.22);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	#panel.app-docked .compose-dock:not([hidden]) {
+		animation:bc-app-composer-grow .18s ease-out;
+	}
+}
+
+@keyframes bc-app-composer-grow {
+	from {
+		opacity:0;
+		transform:scale(.2);
+	}
+
+	to {
+		opacity:1;
+		transform:none;
+	}
+}
+
+#panel.app-docked .compose-dock-close {
+	position:absolute;
+	top:4px;
+	right:4px;
+	z-index:1;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:18px;
+	height:18px;
+	padding:0;
+	border:0;
+	border-radius:4px;
+	background:none;
+	color:var(--meta);
+	font:16px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	#panel.app-docked .compose-dock-close:hover {
+		background:var(--hover-tint);
+		color:var(--text);
+	}
+}
+
+#panel.app-docked .compose-dock {
+	padding-top:22px;
+}
+
+#panel.app-docked #comments-content > .compose-box,
+#panel.app-docked #comments-content > .compose-spacer {
+	display:none;
 }
 
 #panel.app-docked .header-actions button {
@@ -24267,6 +24780,24 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	display:none;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+	#app.discussion-entering #panel.app-docked {
+		animation:bc-app-discussion-in .24s ease;
+	}
+}
+
+@keyframes bc-app-discussion-in {
+	from {
+		opacity:0;
+		transform:translateX(14px);
+	}
+
+	to {
+		opacity:1;
+		transform:none;
+	}
+}
+
 #panel.app-docked .app-discussion-empty {
 	position:absolute;
 	inset:36px 0 0;
@@ -24287,6 +24818,31 @@ header .item-action-link {
 
 .app-phone-only {
 	display:none !important;
+}
+
+@media (min-width: 701px) {
+	#panel.app-docked .story-table tr:has(> .story-title-cell),
+	#panel.app-docked .story-text {
+		display:none;
+	}
+}
+
+@media (min-width: 1101px) {
+	#app-rail {
+		grid-column:1;
+	}
+
+	#app-list {
+		grid-column:2;
+	}
+
+	#app-article {
+		grid-column:3;
+	}
+
+	#panel.app-docked {
+		grid-column:4;
+	}
 }
 
 @media (max-width: 1100px) {
@@ -24421,9 +24977,23 @@ header .item-action-link {
 		display:inline-flex !important;
 	}
 
+	.app-wide-only {
+		display:none !important;
+	}
+
+	#panel.app-docked .toast {
+		bottom:76px;
+	}
+
 	:host {
 		position:relative;
 		inset:auto;
+		padding:0;
+	}
+
+	#app,
+	#app-list {
+		border-radius:0;
 	}
 
 	#app {
@@ -24466,7 +25036,8 @@ header .item-action-link {
 	margin:0 auto;
 	padding:28px 28px 72px;
 	color:var(--text);
-	font:18px/1.62 Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+	font:16px/1.62 Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+	font-size:calc(16px * var(--app-zoom, 1));
 	overflow-wrap:break-word;
 	-webkit-text-size-adjust:100%;
 }
@@ -24624,7 +25195,7 @@ header .item-action-link {
 		},
 		{
 			id: "all",
-			label: "All stories",
+			label: "All articles",
 			icon: APP_ICON('<path fill="currentColor" fill-rule="evenodd" d="M2.5 2.5h9a1 1 0 0 1 1 1V5h1a1 1 0 0 1 1 1v6.2a1.8 1.8 0 0 1-1.8 1.8H3.3a1.8 1.8 0 0 1-1.8-1.8V3.5a1 1 0 0 1 1-1zm10 4v5.7a.5.5 0 0 0 1 0V6.5zM4 4.5v3h6v-3zm0 4.5v1.2h6V9zm0 2.3v1.2h6v-1.2z"/>'),
 		},
 		{
@@ -24647,6 +25218,12 @@ header .item-action-link {
 	const APP_SETTINGS_ICON = APP_ICON(
 		'<path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>',
 	);
+
+	const APP_PANE_ICON = (x) =>
+		`<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="1.4" y="2.7" width="13.2" height="10.6" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect class="pane-fill" x="${x}" y="3.9" width="3.4" height="8.2" rx="1" fill="currentColor"/></svg>`;
+
+	const APP_LIST_TOGGLE_ICON = APP_PANE_ICON("2.7");
+	const APP_DISCUSSION_TOGGLE_ICON = APP_PANE_ICON("9.9");
 
 	const APP_BRAND_ICON = (d, rule = "nonzero") =>
 		`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
@@ -24683,15 +25260,15 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div class="rail-spacer"></div>
 <button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
 </nav>
-<section id="app-list" aria-label="Stories">
+<section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions"><button id="app-list-sync" class="item-action-link" type="button">sync</button><button id="app-mark-read" class="item-action-link" type="button">mark all read</button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
 <div id="app-list-body"></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; stories</button><span id="app-article-title"></span><span id="app-article-site" class="browse-site"></span><a id="app-article-open" class="item-action-link app-pane-action" target="_blank" rel="noopener" hidden>open</a><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
-<div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick a story to read it here, with what people said about it beside it.</div></div>
+<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; articles</button><button id="app-toggle-list" class="app-pane-toggle app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><a id="app-article-open" class="item-action-link" target="_blank" rel="noopener" hidden>open</a><span class="app-zoom app-wide-only" hidden><button id="app-zoom-out" type="button" aria-label="Smaller text">&#8722;</button><span id="app-zoom-level">100%</span><button id="app-zoom-in" type="button" aria-label="Bigger text">+</button></span></span><button id="app-toggle-discussion" class="app-pane-toggle app-wide-only" type="button" aria-pressed="true">${APP_DISCUSSION_TOGGLE_ICON}</button><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
+<div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 </section>
 ${settingsPanelHTML()}
 `;
@@ -24748,6 +25325,16 @@ ${settingsPanelHTML()}
 	function wireApp(ui) {
 		const shadow = ui.shadow;
 
+		ui.headerSubtitle = appDiscussionStatus();
+
+		for (const selector of ["#comment-toggle", "#compose-dock"]) {
+			const element = shadow.querySelector(selector);
+
+			if (element) {
+				shadow.querySelector("#panel").appendChild(element);
+			}
+		}
+
 		shadow.querySelector("#app-rail").addEventListener("click", (event) => {
 			const button = event.target?.closest?.("[data-app-view]");
 
@@ -24794,6 +25381,141 @@ ${settingsPanelHTML()}
 		});
 
 		const appRoot = shadow.querySelector("#app");
+		const listToggle = shadow.querySelector("#app-toggle-list");
+		const discussionToggle = shadow.querySelector("#app-toggle-discussion");
+		let lastListWidth = appRoot.style.getPropertyValue("--app-list-width") || "300px";
+
+		const paneHidden = { list: false, discussion: false };
+		const paneSlides = {};
+
+		const paintPaneToggles = () => {
+			for (const [toggle, hidden, name] of [
+				[listToggle, paneHidden.list, "the article list"],
+				[discussionToggle, paneHidden.discussion, "the discussion"],
+			]) {
+				const label = `${hidden ? "Show" : "Hide"} ${name}`;
+
+				toggle.setAttribute("aria-pressed", hidden ? "false" : "true");
+				toggle.setAttribute("aria-label", label);
+				toggle.title = label;
+			}
+		};
+
+		const setPaneHidden = (pane, hidden, remember = true) => {
+			if (remember && paneHidden[pane] === hidden) {
+				return;
+			}
+
+			const list = pane === "list";
+			const element = shadow.querySelector(list ? "#app-list" : "#panel");
+			const hiddenClass = `${pane}-hidden`;
+			const moving = `${pane}-moving`;
+			const out = `${pane}-out`;
+			const openColumn = (open) => {
+				if (!list) {
+					return;
+				}
+
+				if (open) {
+					appRoot.style.setProperty("--app-list-width", lastListWidth);
+					return;
+				}
+
+				const current = appRoot.style.getPropertyValue("--app-list-width");
+
+				if (current && current !== "0px") {
+					lastListWidth = current;
+				}
+
+				appRoot.style.setProperty("--app-list-width", "0px");
+			};
+
+			paneHidden[pane] = hidden;
+			paintPaneToggles();
+			clearTimeout(paneSlides[pane]);
+			appRoot.classList.remove(moving, out);
+
+			if (!remember || prefersReducedMotion() || (list && appIsNarrow())) {
+				openColumn(!hidden);
+				appRoot.classList.toggle(hiddenClass, hidden);
+			} else if (hidden) {
+				element.style.setProperty("--pane-width", `${Math.round(element.getBoundingClientRect().width)}px`);
+				appRoot.classList.add(moving);
+				openColumn(false);
+				element.getBoundingClientRect();
+				appRoot.classList.add(out);
+				paneSlides[pane] = setTimeout(() => {
+					appRoot.classList.add(hiddenClass);
+					appRoot.classList.remove(moving, out);
+				}, 240);
+			} else {
+				const width = list ? parseFloat(lastListWidth) : parseFloat(element.style.width);
+
+				element.style.setProperty("--pane-width", `${Math.round(width || (list ? 300 : 420))}px`);
+				appRoot.classList.remove(hiddenClass);
+				appRoot.classList.add(moving, out);
+				element.getBoundingClientRect();
+				appRoot.classList.remove(out);
+				paneSlides[pane] = setTimeout(() => {
+					openColumn(true);
+					appRoot.classList.remove(moving);
+				}, 240);
+			}
+
+			if (remember) {
+				save(STORAGE.appPanes, {
+					list: !paneHidden.list,
+					discussion: !paneHidden.discussion,
+				}).catch(console.error);
+			}
+		};
+
+		const zoomOut = shadow.querySelector("#app-zoom-out");
+		const zoomIn = shadow.querySelector("#app-zoom-in");
+		const zoomLevel = shadow.querySelector("#app-zoom-level");
+		let zoomAt = APP_ZOOM_STEPS.indexOf(1);
+
+		const paintAppZoom = () => {
+			const zoom = APP_ZOOM_STEPS[zoomAt];
+
+			shadow.host.style.setProperty("--app-zoom", String(zoom));
+			zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+			zoomOut.disabled = zoomAt === 0;
+			zoomIn.disabled = zoomAt === APP_ZOOM_STEPS.length - 1;
+		};
+
+		const stepAppZoom = (step) => {
+			zoomAt = Math.min(APP_ZOOM_STEPS.length - 1, Math.max(0, zoomAt + step));
+			paintAppZoom();
+			save(STORAGE.appZoom, APP_ZOOM_STEPS[zoomAt]).catch(console.error);
+		};
+
+		zoomOut.onclick = () => stepAppZoom(-1);
+		zoomIn.onclick = () => stepAppZoom(1);
+		paintAppZoom();
+		load(STORAGE.appZoom, null)
+			.then((zoom) => {
+				const at = APP_ZOOM_STEPS.indexOf(Number(zoom));
+
+				if (at >= 0) {
+					zoomAt = at;
+					paintAppZoom();
+				}
+			})
+			.catch(console.error);
+
+		listToggle.onclick = () => setPaneHidden("list", !paneHidden.list);
+		discussionToggle.onclick = () => setPaneHidden("discussion", !paneHidden.discussion);
+		paintPaneToggles();
+		load(STORAGE.appPanes, null)
+			.then((panes) => {
+				if (panes && typeof panes === "object") {
+					setPaneHidden("list", panes.list === false, false);
+					setPaneHidden("discussion", panes.discussion === false, false);
+				}
+			})
+			.catch(console.error);
+
 		const listPane = shadow.querySelector("#app-list");
 		const listHandle = shadow.querySelector("#app-list-resize");
 		let listDrag = null;
@@ -25213,12 +25935,25 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	function resetAppListScroll() {
+		const list = appState?.ui.shadow.querySelector("#app-list-body");
+
+		if (list) {
+			list.scrollTop = 0;
+		}
+
+		if (appIsPhone()) {
+			window.scrollTo(0, 0);
+		}
+	}
+
 	function renderAppListMessage(text) {
 		const note = document.createElement("div");
 
 		note.className = "browse-empty";
 		note.textContent = text;
 		appState.ui.shadow.querySelector("#app-list-body").replaceChildren(note);
+		resetAppListScroll();
 	}
 
 	function renderAppDiscussionEmpty() {
@@ -25231,7 +25966,7 @@ ${settingsPanelHTML()}
 		const note = document.createElement("div");
 
 		note.className = "browse-empty app-discussion-empty";
-		note.textContent = "What people said about the story you open shows here.";
+		note.textContent = "What people said about the article you open shows here.";
 		body.replaceChildren(note);
 	}
 
@@ -25243,6 +25978,10 @@ ${settingsPanelHTML()}
 		const request = ++state.listSeq;
 
 		paintAppRail();
+
+		if (force || state.listView !== view) {
+			resetAppListScroll();
+		}
 
 		if (view === "queue" || view === "watching") {
 			await renderQueueView(ui, list, { part: view === "queue" ? "queued" : "watching" });
@@ -25398,7 +26137,7 @@ ${settingsPanelHTML()}
 
 		await refreshAppSeen();
 
-		showToast(`Marked ${pluralize(rows.length, "story", "stories")} as read`, {
+		showToast(`Marked ${pluralize(rows.length, "article", "articles")} as read`, {
 			action: {
 				label: "undo",
 				onAct: () => {
@@ -25420,7 +26159,14 @@ ${settingsPanelHTML()}
 		const entry = row || state.rowsByURL.get(key) || { story, also: [] };
 
 		state.open = { url, key, row: entry };
-		state.ui.shadow.querySelector("#app").classList.add("has-story");
+		const shell = state.ui.shadow.querySelector("#app");
+
+		if (!shell.classList.contains("has-story")) {
+			shell.classList.add("has-story", "discussion-entering");
+			setTimeout(() => shell.classList.remove("discussion-entering"), 320);
+		}
+
+		clearAppDiscussion();
 		decorateAppRows(state.ui.shadow.querySelector("#app-list-body"));
 		setAppSubject({ url, title: story.title || "" });
 		loadAppArticle(url, story.title || "");
@@ -25458,6 +26204,21 @@ ${settingsPanelHTML()}
 		openAppStory(row ? row.story : { url: address, title: "" }, { row }).catch(
 			console.error,
 		);
+	}
+
+	function clearAppDiscussion() {
+		const body = appState?.ui.body;
+
+		if (!body) {
+			return;
+		}
+
+		const waiting = document.createElement("div");
+
+		waiting.className = "browse-empty app-discussion-empty";
+		waiting.textContent = "Finding what people said…";
+		body.replaceChildren(waiting);
+		appState.ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
 	}
 
 	async function openAppDiscussion(row, { focus = "" } = {}) {
@@ -25536,12 +26297,91 @@ ${settingsPanelHTML()}
 		});
 	}
 
+	function paintAppArticleActions() {
+		const state = appState;
+		const holder = state?.ui.shadow.querySelector("#app-article-actions");
+		const story = state?.open?.row?.story;
+
+		if (!holder) {
+			return;
+		}
+
+		holder.hidden = !story?.url;
+
+		if (!story?.url) {
+			holder.replaceChildren();
+			return;
+		}
+
+		const favorite = story.id
+			? `<span class="app-head-sep">|</span>${favoriteButtonHTML({
+					key: favoriteKeyFor(story),
+					url: story.url,
+					title: story.title,
+					site: story.site,
+					kind: "discussion",
+					source: story.source,
+					id: story.id,
+				})}`
+			: "";
+
+		holder.innerHTML = `<button class="item-action-link app-head-watch" type="button">watch</button>${favorite}<span class="app-head-sep">|</span><button class="item-action-link app-head-queue" type="button">queue</button><span class="app-head-sep">|</span><button class="item-action-link app-head-hide" type="button">hide</button>`;
+
+		const relist = () => renderAppList().catch(console.error);
+
+		wireRowWatchLink(holder.querySelector(".app-head-watch"), story, { reload: relist });
+
+		const queueButton = holder.querySelector(".app-head-queue");
+		const key = queueKey(story);
+		const paintQueued = (queued) => {
+			queueButton.textContent = queued ? "queued" : "queue";
+			queueButton.classList.toggle("item-action-on", queued);
+		};
+
+		loadQueue()
+			.then((entries) => paintQueued(entries.some((entry) => queueKey(entry) === key)))
+			.catch(console.error);
+
+		queueButton.onclick = async () => {
+			let queued = false;
+
+			await mutateQueue((entries) => {
+				queued = !entries.some((entry) => queueKey(entry) === key);
+
+				return queued ? addToQueue(entries, story, Date.now()) : removeFromQueue(entries, key);
+			});
+
+			paintQueued(queued);
+			refreshQueueCount(state.ui.shadow);
+			relist();
+		};
+
+		holder.querySelector(".app-head-hide").onclick = async () => {
+			const hiddenKey = hiddenStoryKey(story);
+
+			await mutateHiddenStories((entries) => addHiddenStory(entries, story));
+			relist();
+			showToast("Article hidden from front pages", {
+				action: {
+					label: "undo",
+					onAct: () => {
+						mutateHiddenStories((entries) => removeHiddenStory(entries, hiddenKey))
+							.then(relist)
+							.catch(console.error);
+					},
+				},
+			});
+		};
+
+		refreshFavoriteControls().catch(console.error);
+	}
+
 	function paintAppArticleHead(url, title) {
 		const shadow = appState.ui.shadow;
 		const open = shadow.querySelector("#app-article-open");
 
-		shadow.querySelector("#app-article-site").textContent = url ? `(${hostLabel(url)})` : "";
-		shadow.querySelector("#app-article-title").textContent = title || "";
+		paintAppArticleActions();
+		shadow.querySelector(".app-zoom").hidden = !url;
 		open.href = url || "";
 		open.hidden = !url;
 	}
@@ -25871,9 +26711,6 @@ ${settingsPanelHTML()}
 		scroller.innerHTML = '<slot name="reader"></slot>';
 		pane.appendChild(scroller);
 
-		if (!appState.ui.shadow.querySelector("#app-article-title").textContent) {
-			appState.ui.shadow.querySelector("#app-article-title").textContent = reader.title;
-		}
 	}
 
 	function showAppCard(article) {
@@ -25921,10 +26758,6 @@ ${settingsPanelHTML()}
 		const before = pageAddress();
 
 		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title });
-
-		if (title) {
-			appState.ui.shadow.querySelector("#app-article-title").textContent = title;
-		}
 
 		if (appState.open && !sameURL(pageAddress(), before)) {
 			appState.open.url = url;
