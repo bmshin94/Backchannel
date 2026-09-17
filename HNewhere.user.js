@@ -20283,7 +20283,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		return {
 			author: comment?.author || "",
 			preview: truncateText(
-				comment?.textElement?.textContent || "",
+				comment?.textElement ? extractTextWithBreaks(comment.textElement) : "",
 				COMMENT_FOCUS_PREVIEW_LENGTH,
 			),
 		};
