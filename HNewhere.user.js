@@ -4931,6 +4931,7 @@ button {
 
 		control.hidden = !unread;
 		control.classList.toggle("is-on", Boolean(settings.newCommentsFirst));
+		control.setAttribute("aria-pressed", String(Boolean(settings.newCommentsFirst)));
 
 		const separator = ui.shadow.querySelector("#sort-sep");
 
@@ -8692,6 +8693,22 @@ button {
 		});
 	}
 
+	function sayVote(container, itemId, message, action = null) {
+		if (!container?.closest?.("#app-article-actions")) {
+			showVoteMessage(itemId, message, action);
+			return;
+		}
+
+		showToast(message, {
+			action: action
+				? {
+						label: action.label,
+						onAct: () => (action.href ? window.open(action.href, "_blank", "noopener") : action.onPress()),
+					}
+				: null,
+		});
+	}
+
 	function submitVote(
 		sourceID,
 		storyID,
@@ -8705,7 +8722,8 @@ button {
 		}
 
 		if (!force && shouldAskToSignIn(rememberedAuthVerdict(sourceID), Date.now())) {
-			showVoteMessage(
+			sayVote(
+				container,
 				itemId,
 				`Sign in to ${getSource(sourceID)?.label || "the source"} to vote.`,
 				{
@@ -8747,14 +8765,14 @@ button {
 				if (result?.ok) {
 					showToast(null);
 				} else if (result?.reason === "popup-blocked" && result.url) {
-					showVoteMessage(itemId, voteFailureMessage(result, label), {
+					sayVote(container, itemId, voteFailureMessage(result, label), {
 						label: `open ${label}`,
 						href: result.url,
 					});
 				} else if (isSidebarLevelReason(result?.reason)) {
 					showToast(voteFailureMessage(result, label));
 				} else {
-					showVoteMessage(itemId, voteFailureMessage(result, label));
+					sayVote(container, itemId, voteFailureMessage(result, label));
 				}
 
 				await rememberAuthFromResult(sourceID, result);
@@ -8850,6 +8868,81 @@ button {
 		}
 	}
 
+	function renderAppHeadVote(container, sourceID, storyID, itemId, descriptors) {
+		const up = descriptors.find((descriptor) => descriptor.variant !== "down") || null;
+		const down = descriptors.find((descriptor) => descriptor.variant === "down") || null;
+		const main = down?.active || !up ? down : up;
+		const other = main === up ? down : up;
+		const thumb = (descriptor) => {
+			const button = document.createElement("button");
+
+			button.type = "button";
+			button.className = `vote-button app-head-icon app-head-thumb app-head-thumb-${descriptor.variant === "down" ? "down" : "up"}`;
+			button.classList.toggle("vote-button-active", Boolean(descriptor.active));
+			button.title = descriptor.title;
+			button.setAttribute("aria-label", descriptor.title);
+			button.setAttribute("aria-pressed", String(Boolean(descriptor.active)));
+
+			return button;
+		};
+		const primary = thumb(main);
+
+		if (down && main !== down) {
+			primary.title = `${main.title} · shift-click to downvote`;
+		}
+
+		primary.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			submitVote(sourceID, storyID, itemId, event.shiftKey && down ? down : main, container);
+		};
+		container.append(primary);
+
+		if (!other) {
+			return;
+		}
+
+		const more = document.createElement("span");
+		const alternate = thumb(other);
+		const show = () => {
+			const box = primary.getBoundingClientRect();
+
+			more.style.left = `${Math.round(box.left + box.width / 2)}px`;
+			more.style.top = `${Math.round(box.bottom)}px`;
+			more.hidden = false;
+		};
+		const hide = () => {
+			more.hidden = true;
+		};
+
+		more.className = "app-vote-more";
+		more.hidden = true;
+		alternate.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			hide();
+			submitVote(sourceID, storyID, itemId, other, container);
+		};
+		more.append(alternate);
+		container.append(more);
+		container.onpointerenter = show;
+		container.onpointerleave = hide;
+
+		for (const button of [primary, alternate]) {
+			button.addEventListener("focus", show);
+			button.addEventListener("blur", (event) => {
+				if (event.relatedTarget !== primary && event.relatedTarget !== alternate) {
+					hide();
+				}
+			});
+			button.addEventListener("keydown", (event) => {
+				if (event.key === "Escape") {
+					hide();
+				}
+			});
+		}
+	}
+
 	function renderVoteControls(container, storyID, itemId, voteInfo) {
 		if (!container) {
 			return;
@@ -8873,6 +8966,11 @@ button {
 		requestAnimationFrame(() => {
 			container.classList.remove("vote-controls-arriving");
 		});
+
+		if (container.classList.contains("app-head-votes")) {
+			renderAppHeadVote(container, sourceID, storyID, itemId, descriptors);
+			return;
+		}
 
 		for (const descriptor of descriptors) {
 			const button = document.createElement("button");
@@ -8911,11 +9009,13 @@ button {
 	}
 
 	function hydrateVoteControlsForStory(storyID, voteLinks = new Map()) {
-		const containers = sidebarUI?.body?.querySelectorAll(
-			`[data-hn-vote-story-id="${String(storyID)}"]`,
-		);
+		const selector = `[data-hn-vote-story-id="${String(storyID)}"]`;
+		const containers = [
+			...(sidebarUI?.body?.querySelectorAll(selector) || []),
+			...(appState?.ui.shadow.querySelectorAll(`#app-article-actions ${selector}`) || []),
+		];
 
-		if (!containers?.length) {
+		if (!containers.length) {
 			return;
 		}
 
@@ -9409,6 +9509,13 @@ button {
 			const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
 	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
 
+			if (appState) {
+				return `${rowQueueLink()}
+	${rowActions()}
+	${rowHideLink()}
+	${counted ? `|\n\t${commentTotal}` : ""}`.replace(/^\s*\|\s*/, "");
+			}
+
 			return `${
 				story.score || story.by
 					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${authorLinkHTML(story.source, story.by)}` : ""}`
@@ -9452,7 +9559,7 @@ button {
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
-	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
+	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)}${appState && !story.watchPlaceholder ? `, ${age}` : ""})</span>` : ""}
 	</div>
 	<div class="story-meta">
 	${meta}
@@ -9688,6 +9795,10 @@ button {
 	}
 
 	async function refreshNotedCount(root) {
+		if (appState) {
+			paintAppCounts().catch(console.error);
+		}
+
 		const tab = root?.querySelector?.("#browse-tab-collection");
 
 		if (!tab) {
@@ -13417,7 +13528,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
-${title ? `<span id="app-discussion-meta" class="app-discussion-meta"></span>` : ""}
+${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><span id="app-discussion-meta" class="app-discussion-meta"></span>` : ""}
 <button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
 <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
 <path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>
@@ -13487,7 +13598,7 @@ ${
 <div class="settings-group">
 <label class="settings-option">
 <input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
-<span>Automatically open the sidebar when a discussion exists</span>
+<span>Automatically open the Sidebar when a discussion exists</span>
 </label>
 <div class="settings-suboptions" data-suboptions-of="autoOpenSidebar">
 <label class="settings-option sub-option">
@@ -13497,7 +13608,7 @@ ${
 </div>
 <label class="settings-option">
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
-<span>Only show the Backchannel toggle when a discussion exists</span>
+<span>Only show the Sidebar toggle when a discussion exists</span>
 </label>
 <div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
 <label class="settings-option sub-option">
@@ -13507,7 +13618,7 @@ ${
 </div>
 <label class="settings-option">
 <input id="setting-keep-sidebar-size" data-setting="keepSidebarSize" type="checkbox">
-<span>Keep the sidebar the same size when a page is zoomed</span>
+<span>Keep the Sidebar the same size when a page is zoomed</span>
 </label>
 </div>
 
@@ -13522,7 +13633,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 <div class="settings-suboptions" data-suboptions-of="annotations">
 <label class="settings-option sub-option">
 <input id="setting-annotations-closed" data-setting="annotationsWhenSidebarClosed" type="checkbox">
-<span>Show when sidebar closed</span>
+<span>Show when Sidebar closed</span>
 </label>
 <label class="settings-option sub-option">
 <input id="setting-pdf-reader" data-setting="pdfReader" type="checkbox">
@@ -16677,13 +16788,26 @@ ${appMode ? "" : settingsPanelHTML()}
 			);
 		};
 
+		if (appState) {
+			textarea.dataset.opened = "1";
+			textarea.rows = 2;
+		}
+
 		textarea.addEventListener("focus", () => {
+			if (appState) {
+				return;
+			}
+
 			textarea.dataset.opened = "1";
 			grow();
 		});
 		textarea.addEventListener("input", grow);
 		textarea.addEventListener("input", () => syncComposeSendable(box));
 		textarea.addEventListener("blur", () => {
+			if (appState) {
+				return;
+			}
+
 			delete textarea.dataset.opened;
 
 			if (!textarea.style.height && !textarea.value.trim()) {
@@ -17221,6 +17345,13 @@ ${appMode ? "" : settingsPanelHTML()}
 	}
 
 	function positionFilterBannerForComment(commentElement) {
+		const comments = appState ? sidebarUI?.body?.querySelector(".top-level-comments") : null;
+
+		if (comments && sidebarUI?.filterBanner) {
+			comments.before(sidebarUI.filterBanner);
+			return;
+		}
+
 		const anchor =
 			commentElement?.closest(".submission")?.querySelector(".story") ||
 			sidebarUI?.body?.querySelector(".story");
@@ -18114,6 +18245,7 @@ ${appMode ? "" : settingsPanelHTML()}
 
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
+		paintAppPinnedDiscussion();
 
 		const sortRow = ui.body.querySelector(".page-sort");
 
@@ -18554,6 +18686,7 @@ ${appMode ? "" : settingsPanelHTML()}
 
 			await saveSettings({ newCommentsFirst: next });
 			control.classList.toggle("is-on", next);
+			control.setAttribute("aria-pressed", String(next));
 
 			if (typeof options.onSortChange === "function") {
 				await options.onSortChange(sort);
@@ -18574,7 +18707,19 @@ ${appMode ? "" : settingsPanelHTML()}
 			}
 		};
 
-		container.appendChild(sortRow);
+		const slot = appState?.ui.shadow.querySelector("#app-discussion-sort");
+
+		if (slot) {
+			const newFirst = sortRow.querySelector("#sort-new-first");
+
+			newFirst.classList.add("app-new-first", "app-head-icon");
+			newFirst.innerHTML = '<span class="app-new-mark">NEW</span>';
+			newFirst.setAttribute("aria-label", "Prioritize unread comments");
+			newFirst.title = "Prioritize unread comments";
+			slot.replaceChildren(sortRow);
+		} else {
+			container.appendChild(sortRow);
+		}
 	}
 
 	function renderPageHeader(stories, container, options = {}) {
@@ -18684,18 +18829,6 @@ ${appMode ? "" : settingsPanelHTML()}
 		return wrapper;
 	}
 
-	function appDiscussionStatus() {
-		if (!appState.discussionStatus) {
-			const status = document.createElement("div");
-
-			status.id = "app-discussion-status";
-			status.className = "app-discussion-status";
-			appState.discussionStatus = status;
-		}
-
-		return appState.discussionStatus;
-	}
-
 	function paintAppDiscussionMeta(wrapper, stories, total) {
 		const shadow = appState?.ui.shadow;
 		const slot = shadow?.querySelector("#app-discussion-meta");
@@ -18704,55 +18837,83 @@ ${appMode ? "" : settingsPanelHTML()}
 			return;
 		}
 
-		let anchor = wrapper.querySelector(".source-menu-anchor");
-		let disclosure;
-		let menu;
+		const summary =
+			stories.length > 1
+				? `${pluralize(total, "comment")} across ${pluralize(stories.length, "discussion")}`
+				: pluralize(total, "comment");
+		const anchor = stories.length > 1 ? wrapper.querySelector(".source-menu-anchor") : null;
 
-		if (anchor) {
-			disclosure = anchor.querySelector(".page-header-disclosure");
-			menu = anchor.querySelector(".source-menu");
-			disclosure.textContent = pluralize(stories.length, "discussion");
-		} else {
-			anchor = document.createElement("span");
-			anchor.className = "source-menu-anchor";
-			anchor.innerHTML = `<button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu"></button><div id="source-menu" class="source-menu hidden"></div>`;
-			disclosure = anchor.querySelector(".page-header-disclosure");
-			menu = anchor.querySelector(".source-menu");
-			disclosure.textContent = pluralize(total, "comment");
-			disclosure.onclick = () => {
-				const open = menu.classList.contains("hidden");
+		slot.classList.toggle("app-discussion-lone", !anchor);
 
-				menu.classList.toggle("hidden", !open);
-				disclosure.setAttribute("aria-expanded", open ? "true" : "false");
-			};
-			menu.addEventListener("keydown", (event) => {
-				if (event.key === "Escape") {
-					closeSourceMenu(shadow);
-					disclosure.focus();
-				}
-			});
+		if (!anchor) {
+			const mark = document.createElement("span");
+
+			mark.className = "app-discussion-mark";
+			mark.setAttribute("role", "img");
+			mark.setAttribute("aria-label", summary);
+			mark.title = summary;
+			mark.innerHTML = APP_DISCUSSIONS_ICON;
+			slot.replaceChildren(mark);
+			return;
 		}
 
-		const status = appDiscussionStatus();
+		const disclosure = anchor.querySelector(".page-header-disclosure");
+		const menu = anchor.querySelector(".source-menu");
 		const everything = menu.querySelector(".source-menu-option:not([data-discussion-key])");
+		const hint = document.createElement("div");
 
-		status.classList.add("settings-option-hint");
+		disclosure.innerHTML = APP_DISCUSSIONS_ICON;
+		disclosure.classList.add("app-head-icon");
+		disclosure.setAttribute("aria-label", summary);
+		disclosure.title = summary;
+		const title = document.createElement("div");
+
+		title.className = "settings-head app-sources-head";
+		title.innerHTML = '<span class="settings-crumb-root">Sources</span>';
+		menu.prepend(title);
+		hint.className = "settings-option-hint app-discussion-summary";
+		hint.textContent = summary;
 
 		if (everything) {
-			everything.after(status);
+			everything.after(hint);
 		} else {
-			menu.prepend(status);
+			menu.prepend(hint);
 		}
 
-		if (stories.length > 1) {
-			const lead = document.createElement("span");
+		const options = [...menu.querySelectorAll(".source-menu-option[data-discussion-key]")];
 
-			lead.className = "app-discussion-total";
-			lead.textContent = `${pluralize(total, "comment")} across `;
-			slot.replaceChildren(lead, anchor);
-		} else {
-			slot.replaceChildren(anchor);
+		if (options.length > 1 && !menu.querySelector(".choice-head") && options.every((option) => option.querySelector(".live-pill"))) {
+			const head = document.createElement("div");
+
+			for (const option of options) {
+				option.querySelector(".live-pill").remove();
+			}
+
+			head.className = "choice-head";
+			head.innerHTML = '<span class="live-pill">LIVE</span>';
+			options[0].closest(".choice-group")?.prepend(head);
 		}
+
+		menu.querySelector(".choice-head .live-pill")?.closest(".choice-group")?.classList.add("app-live-group");
+
+		disclosure.addEventListener("click", () => {
+			requestAnimationFrame(() => {
+				if (menu.classList.contains("hidden")) {
+					return;
+				}
+
+				const room = shadow.querySelector("#panel").getBoundingClientRect().bottom - menu.getBoundingClientRect().top - 12;
+
+				menu.style.maxHeight = `${Math.max(160, Math.floor(room))}px`;
+			});
+		});
+
+		const arrow = document.createElement("span");
+
+		arrow.className = "app-drop-arrow";
+		arrow.setAttribute("aria-hidden", "true");
+		menu.after(arrow);
+		slot.replaceChildren(anchor);
 	}
 
 	function syncSubmissionDetails() {
@@ -18794,11 +18955,17 @@ ${appMode ? "" : settingsPanelHTML()}
 	}
 
 	function syncFilterAffordances() {
-		const menu = sidebarUI?.body?.querySelector(".source-menu");
+		const menu =
+			sidebarUI?.body?.querySelector(".source-menu") ||
+			appState?.ui.shadow.querySelector("#app-discussion-meta .source-menu");
 
 		if (menu) {
 			syncSourceMenuState(menu);
 		}
+
+		appState?.ui.shadow
+			.querySelector("#app-discussion-meta .page-header-disclosure")
+			?.classList.toggle("is-filtered", activeCommentFilter?.type === "discussion");
 
 		syncSubmissionDetails();
 		syncSourceBadges();
@@ -19098,6 +19265,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	function setSidebarSyncStatus(ui, status) {
+		if (appState) {
+			appState.discussionSync = status?.onSync || null;
+		}
+
 		if (!ui?.headerSubtitle) {
 			return;
 		}
@@ -20366,12 +20537,17 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			setQuoteRedundancy(null, false);
 			updateSubmissionVisibility(null);
 			syncFilterAffordances();
-			sidebarUI?.filterBanner?.classList.add("hidden");
-			if (sidebarUI?.filterBannerQuote) {
-				sidebarUI.filterBannerQuote.textContent = "";
-				sidebarUI.filterBannerQuote.classList.remove(
-					"filter-banner-quote-comment",
-				);
+
+			if (!paintAppPinnedDiscussion()) {
+				sidebarUI?.filterBanner?.classList.add("hidden");
+				sidebarUI?.filterBanner?.classList.remove("app-pinned");
+				if (sidebarUI?.filterBannerQuote) {
+					sidebarUI.filterBannerQuote.textContent = "";
+					sidebarUI.filterBannerQuote.classList.remove(
+						"filter-banner-quote-comment",
+						"app-focus-post",
+					);
+				}
 			}
 
 			restoreReadingPosition(position);
@@ -23159,8 +23335,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 					sidebarUI.filterBanner.classList.add("hidden");
 					sidebarUI.filterBannerQuote.textContent = "";
 				} else {
-					sidebarUI.filterBanner.classList.remove("hidden");
+					sidebarUI.filterBanner.classList.remove("hidden", "app-pinned");
+					sidebarUI.filterBannerQuote.classList.remove("app-focus-post");
 					paintBanner(sidebarUI.filterBannerQuote);
+					syncAppFocusControls();
 				}
 			}
 
@@ -23218,16 +23396,136 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return;
 		}
 
+		const story = appState
+			? (renderedDiscussions || []).find((discussion) => discussion.key === discussionKey)
+			: null;
+
 		applyFocusedDiscussion(
 			{
 				filter: { type: "discussion", key: discussionKey },
 				directMatchIds: new Set(roots.map((rendered) => rendered.id)),
 				anchorElement: null,
-				banner: false,
-				paintBanner: () => {},
+				banner: Boolean(story),
+				paintBanner: (quote) => paintDiscussionAttribution(quote, story),
 			},
 			options,
 		);
+	}
+
+	function paintDiscussionAttribution(quote, story) {
+		if (appState) {
+			paintAppDiscussionPost(quote, story);
+			return;
+		}
+
+		const byline = document.createElement("span");
+		const points = story.score ?? story.points;
+		const author = story.author ?? story.by;
+		const time = story.createdAt ?? story.time;
+		const facts = [
+			points === null || points === undefined ? "" : pluralize(points, "point"),
+			author ? `by ${author}` : "",
+			time ? timeAgo(time) : "",
+		]
+			.filter(Boolean)
+			.join(" ");
+
+		quote.classList.add("filter-banner-quote-comment");
+		byline.className = "filter-banner-author";
+		byline.textContent = discussionChoiceLabel(story);
+		quote.replaceChildren(
+			byline,
+			document.createTextNode(
+				[facts, pluralize(story.commentCount ?? story.descendants ?? 0, "comment")]
+					.filter(Boolean)
+					.join(" · "),
+			),
+		);
+	}
+
+	function paintAppDiscussionPost(quote, story) {
+		const points = story.score ?? story.points;
+		const author = story.author ?? story.by;
+		const time = story.createdAt ?? story.time;
+		const label = story.baseLabel || discussionChoiceLabel(story);
+		const byline = [
+			points === null || points === undefined ? "" : escapeHTML(pluralize(points, "point")),
+			author ? `by ${authorLinkHTML(story.source, author)}` : "",
+		]
+			.filter(Boolean)
+			.join(" ");
+		const meta = [byline, escapeHTML(pluralize(story.commentCount ?? story.descendants ?? 0, "comment"))]
+			.filter(Boolean)
+			.join(" | ");
+
+		quote.classList.add("filter-banner-quote-comment", "app-focus-post");
+		quote.innerHTML = `<div class="app-focus-post-title">${escapeHTML(story.title || label)} <span class="app-focus-post-site">(${escapeHTML([label, time ? timeAgo(time) : ""].filter(Boolean).join(", "))})</span></div><div class="app-focus-post-meta">${meta}</div>`;
+	}
+
+	function appFocusedDiscussion() {
+		const only = renderedDiscussions.length === 1 ? renderedDiscussions[0] : null;
+		const byKey = (key) => renderedDiscussions.find((discussion) => discussion.key === key) || null;
+
+		if (activeCommentFilter?.type === "discussion") {
+			return byKey(activeCommentFilter.key);
+		}
+
+		if (activeCommentFilter?.type === "comment") {
+			return byKey(renderedComments.find((rendered) => rendered.id === activeCommentFilter.id)?.discussionKey) || only;
+		}
+
+		if (activeCommentFilter?.type === "quote") {
+			const ids = new Set((annotationController?.groupsByKey.get(activeCommentFilter.key)?.comments || []).map((match) => match.commentId));
+			const keys = new Set(renderedComments.filter((rendered) => ids.has(rendered.id)).map((rendered) => rendered.discussionKey));
+
+			return keys.size === 1 ? byKey([...keys][0]) : only;
+		}
+
+		return only;
+	}
+
+	function syncAppFocusControls() {
+		const shadow = appState?.ui.shadow;
+		const open = shadow?.querySelector("#filter-banner-open");
+		const close = shadow?.querySelector("#clear-filter");
+
+		if (!open || !close) {
+			return;
+		}
+
+		const story = appFocusedDiscussion();
+		const href = story ? discussionURL(story) : null;
+		const label = story ? `Open this discussion on ${sourceShortLabel(story)}` : "";
+
+		open.hidden = !href;
+		open.title = label;
+		open.setAttribute("aria-label", label);
+
+		if (href) {
+			open.href = href;
+		} else {
+			open.removeAttribute("href");
+		}
+
+		close.hidden = !activeCommentFilter;
+	}
+
+	function paintAppPinnedDiscussion() {
+		const banner = sidebarUI?.filterBanner;
+		const quote = sidebarUI?.filterBannerQuote;
+		const story = appState && !activeCommentFilter && renderedDiscussions.length === 1 ? renderedDiscussions[0] : null;
+
+		if (!banner || !quote || !story) {
+			return false;
+		}
+
+		positionFilterBannerForComment(null);
+		paintAppDiscussionPost(quote, story);
+		banner.classList.add("app-pinned");
+		banner.classList.remove("hidden");
+		syncAppFocusControls();
+
+		return true;
 	}
 
 	function applyCommentFocus(commentId, options = {}) {
@@ -23962,9 +24260,48 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	--rail-knock:var(--rail-bg);
 }
 
+@media (min-width: 701px) {
+	#app-rail .rail-button.rail-empty {
+		display:none;
+	}
+}
+
+@media (min-width: 701px) and (prefers-reduced-motion: no-preference) {
+	#app-rail .rail-button.rail-arriving {
+		animation:bc-app-rail-arrive .38s cubic-bezier(.2,.9,.3,1.25) both;
+	}
+}
+
+@keyframes bc-app-rail-arrive {
+	from {
+		max-height:0;
+		margin-top:-6px;
+		opacity:0;
+		transform:scale(.2);
+	}
+
+	55% {
+		opacity:1;
+	}
+
+	to {
+		max-height:32px;
+		margin-top:0;
+		opacity:1;
+		transform:none;
+	}
+}
+
 @media (hover: hover) {
 	.rail-button:hover:not(:disabled):not(.is-current) {
 		background:rgba(255,255,255,.16);
+	}
+}
+
+@media (min-width: 701px) {
+	.rail-button:active:not(:disabled):not(.is-current),
+	#settings-toggle.rail-button[aria-expanded="true"] {
+		background:rgba(255,255,255,.26);
 	}
 }
 
@@ -23981,7 +24318,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 .rail-button:disabled {
-	opacity:.35;
+	opacity:.33;
 	cursor:default;
 }
 
@@ -24117,73 +24454,281 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	margin-left:auto;
 }
 
+.app-head-icon {
+	flex:0 0 auto;
+	position:relative;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:24px;
+	height:24px;
+	padding:0;
+	border:0;
+	border-radius:5px;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.app-head-icon[hidden] {
+	display:none;
+}
+
+.app-head-icon svg {
+	display:block;
+}
+
+:host {
+	--icon-fill:#fff;
+	--icon-on:var(--text);
+	--icon-knock:var(--text);
+	--icon-solid:none;
+	--icon-hollow:inline;
+}
+
+:host(.${DARK_CLASS}) {
+	--icon-on:#fff;
+	--icon-knock:var(--bg);
+	--icon-solid:inline;
+	--icon-hollow:none;
+}
+
+.app-sync-glyph {
+	display:block;
+	width:20px;
+	height:20px;
+	transform-origin:10px 10px;
+	backface-visibility:hidden;
+	-webkit-backface-visibility:hidden;
+}
+
+.app-sync-glyph svg {
+	display:block;
+	overflow:visible;
+}
+
+#app-list-sync.is-syncing .app-sync-glyph {
+	animation:bc-app-sync-spin .9s linear infinite;
+	will-change:transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#app-list-sync.is-syncing .app-sync-glyph {
+		animation:bc-app-sync-pulse 1.2s ease-in-out infinite;
+	}
+}
+
+@keyframes bc-app-sync-spin {
+	from {
+		transform:rotate(0deg) translateZ(0);
+	}
+
+	to {
+		transform:rotate(-360deg) translateZ(0);
+	}
+}
+
+@keyframes bc-app-sync-pulse {
+	50% {
+		opacity:.35;
+	}
+}
+
+#app-list .app-pane-actions {
+	gap:2px;
+	margin-right:-6px;
+}
+
 .app-pane-middle {
 	flex:1 1 auto;
 	display:flex;
-	align-items:baseline;
+	align-items:center;
 	justify-content:center;
-	gap:8px;
+	gap:2px;
 	min-width:0;
 	overflow:hidden;
 }
 
 .app-article-actions {
 	display:inline-flex;
-	align-items:baseline;
-	gap:4px;
+	align-items:center;
+	gap:2px;
 }
 
 .app-article-actions[hidden] {
 	display:none;
 }
 
-.app-article-actions .item-action-link,
-.app-head-sep {
-	font-size:10px;
-}
-
-.app-head-sep {
-	color:var(--meta);
-	opacity:.6;
-}
-
-.app-zoom {
+#app-article-actions .app-head-votes {
 	display:inline-flex;
 	align-items:center;
-	gap:6px;
 }
 
-.app-zoom[hidden] {
-	display:none !important;
+#app-article-actions .app-head-votes.hidden {
+	display:none;
 }
 
-.app-zoom button {
-	border:0;
-	padding:0 2px;
-	background:none;
+#app-article-actions .vote-button {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	width:24px;
+	min-width:24px;
+	height:24px;
+	margin:0;
+	border-radius:5px;
 	color:var(--meta);
-	font:inherit;
-	font-size:13px;
-	line-height:1;
 	cursor:pointer;
 }
 
-.app-zoom button:disabled {
-	opacity:.4;
-	cursor:default;
+#app-article-actions .app-head-icon::before,
+#app-article-actions .app-head-icon::after {
+	content:"";
+	position:absolute;
+	top:50%;
+	left:50%;
+	width:15px;
+	height:15px;
+	margin:-7.5px 0 0 -7.5px;
+	border:0;
+	pointer-events:none;
 }
 
-@media (hover: hover) {
-	.app-zoom button:not(:disabled):hover {
-		color:var(--text);
-	}
+#app-article-actions .app-head-icon::before {
+	display:var(--pressed-layer);
+	background:var(--icon-fill);
+	-webkit-mask:var(--head-fill) center / 15px 15px no-repeat;
+	mask:var(--head-fill) center / 15px 15px no-repeat;
 }
 
-#app-zoom-level {
-	min-width:34px;
+#app-article-actions .app-head-icon::after {
+	background:currentColor;
+	-webkit-mask:var(--head-outline) center / 15px 15px no-repeat;
+	mask:var(--head-outline) center / 15px 15px no-repeat;
+}
+
+#app-article-actions .app-head-thumb-up {
+	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77z' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
+	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77zM2.11 7.43h2.66v6.27H2.68a0.57 0.57 0 0 1 -0.57 -0.57z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+#app-article-actions .app-head-thumb-down {
+	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77z' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round' transform='rotate%28180 8 8%29'/%3E%3C/svg%3E");
+	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77zM2.11 7.43h2.66v6.27H2.68a0.57 0.57 0 0 1 -0.57 -0.57z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round' transform='rotate%28180 8 8%29'/%3E%3C/svg%3E");
+}
+
+#app-article-actions .app-vote-more {
+	position:fixed;
+	z-index:30;
+	padding-top:8px;
+	transform:translateX(-50%);
+}
+
+#app-article-actions .app-vote-more[hidden] {
+	display:none;
+}
+
+#app-article-actions .app-vote-more .vote-button {
+	width:30px;
+	height:30px;
+	border:1px solid var(--surface-border);
+	border-radius:7px;
+	background:var(--surface);
+	box-shadow:0 6px 18px rgba(0,0,0,.16);
+}
+
+.app-head-group {
+	display:inline-flex;
+	align-items:center;
+	gap:2px;
+}
+
+.app-head-sep {
+	margin:0 5px;
 	color:var(--meta);
+	font-size:11px;
+	line-height:1;
+	opacity:.55;
+	-webkit-user-select:none;
+	user-select:none;
+}
+
+.app-head-sep[hidden] {
+	display:none;
+}
+
+#app-article-actions .item-action-link {
+	font-size:0;
+	line-height:0;
+	text-decoration:none;
+}
+
+#app-article-actions .item-action-link[hidden] {
+	display:none;
+}
+
+.app-head-watch {
+	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3.7c-3.2 0-5.6 2.6-6.4 4.3.8 1.7 3.2 4.3 6.4 4.3s5.6-2.6 6.4-4.3C13.6 6.3 11.2 3.7 8 3.7zM9.2 8a1.2 1.2 0 1 1 -2.4 0a1.2 1.2 0 1 1 2.4 0z' fill='black' fill-rule='evenodd'/%3E%3Cpath d='M8 3.7c-3.2 0-5.6 2.6-6.4 4.3.8 1.7 3.2 4.3 6.4 4.3s5.6-2.6 6.4-4.3C13.6 6.3 11.2 3.7 8 3.7z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
+	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3.7c-3.2 0-5.6 2.6-6.4 4.3.8 1.7 3.2 4.3 6.4 4.3s5.6-2.6 6.4-4.3C13.6 6.3 11.2 3.7 8 3.7z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='8' cy='8' r='1.9' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+#app-article-actions [data-item-action="fave"] {
+	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='black' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.app-view-toggle {
+	align-items:baseline;
+	box-sizing:border-box;
+	padding-top:6px;
+	line-height:1;
+}
+
+#app-view-toggle[hidden] {
+	display:none !important;
+}
+
+.app-view-big {
+	font-size:13px;
+}
+
+.app-view-small {
 	font-size:10px;
-	text-align:center;
+}
+
+.app-view-menu {
+	position:fixed;
+	z-index:30;
+	width:auto;
+	box-sizing:border-box;
+	padding:10px 10px 12px;
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 8px 24px rgba(0,0,0,.16);
+	font-size:12px;
+	line-height:1.35;
+	text-align:left;
+}
+
+.app-view-menu[hidden] {
+	display:none;
+}
+
+.app-view-menu .stepper {
+	margin-top:0;
+}
+
+.app-view-menu .stepper-value {
+	box-sizing:border-box;
+	height:24px;
+	align-items:center;
+}
+
+.app-view-menu .settings-head {
+	margin-bottom:6px;
 }
 
 .app-pane-toggle {
@@ -24201,19 +24746,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	cursor:pointer;
 }
 
-@media (hover: hover) {
-	.app-pane-toggle:hover {
-		background:var(--hover-tint);
-		color:var(--text);
-	}
-}
-
 .app-pane-toggle .pane-fill {
-	opacity:.25;
-}
-
-.app-pane-toggle[aria-pressed="false"] .pane-fill {
-	opacity:1;
+	fill:var(--pressed-fill);
 }
 
 .app-wide-only {
@@ -24272,6 +24806,216 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 .app-pane-actions .item-action-link,
 #app-article-open {
 	font-size:10px;
+}
+
+.app-settings-modal {
+	position:fixed;
+	inset:0;
+	z-index:60;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	padding:32px;
+	background:rgba(0,0,0,.45);
+}
+
+.app-settings-modal[hidden] {
+	display:none;
+}
+
+.app-settings-dialog {
+	display:flex;
+	flex-direction:column;
+	box-sizing:border-box;
+	width:min(678px, 100%);
+	height:min(520px, 100%);
+	overflow:hidden;
+	border:1px solid var(--surface-border);
+	border-radius:10px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 24px 64px rgba(0,0,0,.35);
+	font-size:12px;
+	line-height:1.35;
+	text-align:left;
+}
+
+.app-settings-top {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	padding:6px 6px 6px 14px;
+	border-bottom:1px solid var(--surface-divider);
+}
+
+.app-settings-title {
+	font-size:13px;
+	font-weight:600;
+}
+
+.app-settings-body {
+	display:flex;
+	flex:1 1 auto;
+	min-height:0;
+}
+
+.app-settings-nav {
+	flex:0 0 200px;
+	display:flex;
+	flex-direction:column;
+	gap:1px;
+	box-sizing:border-box;
+	padding:8px 8px;
+	border-right:1px solid var(--surface-divider);
+	background:var(--help-bg);
+}
+
+.app-settings-tab {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	white-space:nowrap;
+	padding:5px 8px;
+	border:0;
+	border-radius:6px;
+	background:none;
+	color:var(--surface-text);
+	font:inherit;
+	font-size:12px;
+	text-align:left;
+	cursor:pointer;
+}
+
+.app-settings-tab svg {
+	flex:0 0 auto;
+	color:var(--meta);
+}
+
+.app-settings-tab[aria-current="page"] {
+	background:var(--active-tint);
+	font-weight:600;
+}
+
+.app-settings-tab[aria-current="page"] svg {
+	color:var(--surface-text);
+}
+
+@media (hover: hover) {
+	.app-settings-tab:not([aria-current="page"]):hover {
+		background:var(--hover-tint);
+	}
+}
+
+.app-settings-tab:not([aria-current="page"]):active {
+	background:var(--active-tint);
+}
+
+.settings-credits-mark {
+	display:none;
+}
+
+.app-settings-nav .settings-credits {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:6px;
+	margin-top:auto;
+	padding:6px 0 0 8px;
+}
+
+.app-settings-nav .settings-credits-label {
+	display:none;
+}
+
+.app-settings-nav .settings-credits-mark {
+	display:block;
+}
+
+.app-settings-nav .settings-credits a[href$="/issues"] {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:24px;
+	height:24px;
+	border-radius:5px;
+	color:var(--meta);
+	text-decoration:none;
+}
+
+@media (hover: hover) {
+	.app-settings-nav .settings-credits a[href$="/issues"]:hover {
+		background:var(--hover-tint);
+		color:var(--text);
+	}
+}
+
+.app-settings-nav .settings-credits a[href$="/issues"]:active {
+	background:var(--active-tint);
+	color:var(--icon-on);
+}
+
+.app-settings-content {
+	flex:1 1 auto;
+	min-width:0;
+	overflow-y:auto;
+	padding:12px 18px 16px;
+}
+
+.app-settings-heading {
+	margin:0 0 10px;
+	font-size:13px;
+	font-weight:600;
+}
+
+#app-settings-content .settings-panel {
+	position:static;
+	width:auto;
+	max-width:440px;
+	max-height:none;
+	overflow:visible;
+	padding:0;
+	border:0;
+	border-radius:0;
+	background:none;
+	box-shadow:none;
+	z-index:auto;
+}
+
+#app-settings-content .settings-head,
+#app-settings-content [data-app-section="links"],
+#app-settings-modal[data-section="general"] [data-app-section="sidebar"],
+#app-settings-modal[data-section="sidebar"] [data-app-section="general"] {
+	display:none;
+}
+
+#app-settings-content .settings-panes {
+	display:block;
+	width:100%;
+	height:auto !important;
+	overflow:visible;
+	transform:none !important;
+	transition:none;
+}
+
+#app-settings-content .settings-pane {
+	width:100%;
+	visibility:visible;
+}
+
+#app-settings-content .settings-panes.is-secondary > .settings-pane-primary,
+#app-settings-content .settings-panes:not(.is-secondary) > .settings-pane-secondary {
+	display:none;
+}
+
+#app-settings-content .settings-group + .settings-group {
+	margin-top:0;
+	padding-top:0;
+	border-top:0;
+}
+
+#app-settings-content .settings-group {
+	margin-bottom:12px;
 }
 
 #app > .settings-panel {
@@ -24338,6 +25082,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	text-align:center;
 }
 
+#app-list-body .browse-skeleton-label {
+	margin:12px 0;
+}
+
 #app-list-body .browse-subhead,
 #app-list-body .browse-empty,
 #app-list-body .browse-skeleton,
@@ -24348,6 +25096,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 #app-list-body .browse-row.is-open {
 	background:var(--open-row);
+}
+
+#app-list-body .browse-row.is-open :is(.item-action-link, .browse-save-link, .browse-comments-total) {
+	text-decoration-color:color-mix(in srgb, currentColor 50%, transparent);
 }
 
 #app-list-body .app-row:not(.is-unread) .browse-title-link {
@@ -24432,11 +25184,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	position:absolute;
 	left:0;
 	top:0;
-	width:calc(100% / var(--app-zoom, 1));
-	height:calc(100% / var(--app-zoom, 1));
+	width:calc(100% / (var(--app-zoom, 1) * var(--app-frame-fit, 1)));
+	height:calc(100% / (var(--app-zoom, 1) * var(--app-frame-fit, 1)));
 	border:0;
 	background:#fff;
-	transform:scale(var(--app-zoom, 1));
+	transform:scale(calc(var(--app-zoom, 1) * var(--app-frame-fit, 1)));
 	transform-origin:0 0;
 }
 
@@ -24501,10 +25253,74 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	transform:translate(-50%,0);
 }
 
+#header-submit {
+	display:none !important;
+}
+
+.app-discussion-sort {
+	display:inline-flex;
+	align-items:center;
+	margin-right:6px;
+	font-weight:normal;
+}
+
+.app-discussion-sort:empty {
+	display:none;
+}
+
+#panel.app-docked .app-discussion-sort .page-sort {
+	gap:5px;
+	padding:0;
+	font-size:10px;
+}
+
+#panel.app-docked .app-discussion-sort .page-sort-sep {
+	display:none !important;
+}
+
+#panel.app-docked .app-new-first {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	height:24px;
+	min-width:24px;
+	padding:0 3px;
+	border:0;
+	border-radius:5px;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+#panel.app-docked .app-new-first[hidden] {
+	display:none;
+}
+
+.app-new-mark {
+	display:block;
+	box-sizing:border-box;
+	padding:0 1px;
+	border:1px solid currentColor;
+	border-radius:2px;
+	background:var(--pressed-fill, none);
+	color:var(--pressed-knock, inherit);
+	font:700 6px/7px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	letter-spacing:0;
+}
+
+#panel.app-docked .app-discussion-sort .page-sort-select {
+	padding:1px 2px;
+	font-size:10px;
+}
+
+#panel.app-docked:has(#comments-content.list-filtered) .app-discussion-sort {
+	display:none;
+}
+
 .app-discussion-meta {
 	display:inline-flex;
 	align-items:center;
-	margin-right:4px;
+	margin-right:0;
 	font-weight:normal;
 }
 
@@ -24512,27 +25328,131 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	position:relative;
 }
 
-#panel.app-docked .app-discussion-meta .page-header-disclosure {
-	width:auto;
-	height:auto;
+#panel.app-docked .app-discussion-meta .page-header-disclosure,
+.app-discussion-mark {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	width:24px;
+	height:24px;
 	padding:0;
 	border:0;
-	background:none;
+	border-radius:5px;
+	text-decoration:none;
+}
+
+.app-discussion-mark {
 	color:var(--meta);
-	font:inherit;
-	font-size:10px;
-	font-weight:normal;
-	text-decoration:underline dotted;
-	text-underline-offset:2px;
+}
+
+@media (min-width: 701px) {
+	#app-discussion-meta.app-discussion-lone {
+		display:none;
+	}
+}
+
+@media (max-width: 700px) {
+	#panel.app-docked .filter-banner.app-pinned {
+		display:none;
+	}
+}
+
+.app-people {
+	position:relative;
+	display:block;
+	width:15px;
+	height:15px;
+}
+
+.app-people::before,
+.app-people::after {
+	content:"";
+	position:absolute;
+	inset:0;
+}
+
+.app-people::before {
+	display:var(--pressed-layer, none);
+	background:var(--icon-fill);
+	-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cmask id='k'%3E%3Crect x='-1' y='-1' width='18' height='18' fill='white'/%3E%3Cg fill='black' stroke='black' stroke-width='3.4' stroke-linejoin='round'%3E%3Ccircle cx='5.9' cy='7' r='2.3' /%3E%3Cpath d='M1.6 14.4c0.2-2.6 1.95-4.2 4.3-4.2s4.1 1.6 4.3 4.2z'/%3E%3C/g%3E%3C/mask%3E%3Cg mask='url(%23k)'%3E%3Ccircle cx='10.9' cy='4.4' r='2.1' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3Cpath d='M7.3 11.9c0.25-2.35 1.65-3.75 3.6-3.75s3.35 1.4 3.6 3.75z' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/g%3E%3C/svg%3E") center / 15px 15px no-repeat;
+	mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cmask id='k'%3E%3Crect x='-1' y='-1' width='18' height='18' fill='white'/%3E%3Cg fill='black' stroke='black' stroke-width='3.4' stroke-linejoin='round'%3E%3Ccircle cx='5.9' cy='7' r='2.3' /%3E%3Cpath d='M1.6 14.4c0.2-2.6 1.95-4.2 4.3-4.2s4.1 1.6 4.3 4.2z'/%3E%3C/g%3E%3C/mask%3E%3Cg mask='url(%23k)'%3E%3Ccircle cx='10.9' cy='4.4' r='2.1' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3Cpath d='M7.3 11.9c0.25-2.35 1.65-3.75 3.6-3.75s3.35 1.4 3.6 3.75z' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/g%3E%3C/svg%3E") center / 15px 15px no-repeat;
+}
+
+.app-people::after {
+	background:currentColor;
+	-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cmask id='k'%3E%3Crect x='-1' y='-1' width='18' height='18' fill='white'/%3E%3Cg fill='black' stroke='black' stroke-width='3.4' stroke-linejoin='round'%3E%3Ccircle cx='5.9' cy='7' r='2.3' /%3E%3Cpath d='M1.6 14.4c0.2-2.6 1.95-4.2 4.3-4.2s4.1 1.6 4.3 4.2z'/%3E%3C/g%3E%3C/mask%3E%3Cg mask='url(%23k)'%3E%3Ccircle cx='10.9' cy='4.4' r='2.1' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M7.3 11.9c0.25-2.35 1.65-3.75 3.6-3.75s3.35 1.4 3.6 3.75z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/g%3E%3Ccircle cx='5.9' cy='7' r='2.3' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M1.6 14.4c0.2-2.6 1.95-4.2 4.3-4.2s4.1 1.6 4.3 4.2z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 15px 15px no-repeat;
+	mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cmask id='k'%3E%3Crect x='-1' y='-1' width='18' height='18' fill='white'/%3E%3Cg fill='black' stroke='black' stroke-width='3.4' stroke-linejoin='round'%3E%3Ccircle cx='5.9' cy='7' r='2.3' /%3E%3Cpath d='M1.6 14.4c0.2-2.6 1.95-4.2 4.3-4.2s4.1 1.6 4.3 4.2z'/%3E%3C/g%3E%3C/mask%3E%3Cg mask='url(%23k)'%3E%3Ccircle cx='10.9' cy='4.4' r='2.1' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M7.3 11.9c0.25-2.35 1.65-3.75 3.6-3.75s3.35 1.4 3.6 3.75z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/g%3E%3Ccircle cx='5.9' cy='7' r='2.3' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M1.6 14.4c0.2-2.6 1.95-4.2 4.3-4.2s4.1 1.6 4.3 4.2z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 15px 15px no-repeat;
+}
+
+#panel.app-docked .app-discussion-meta .page-header-disclosure {
 	cursor:pointer;
 }
 
-.app-discussion-total {
-	color:var(--meta);
-	font-size:10px;
-	font-weight:normal;
-	white-space:pre;
+.app-drop-arrow {
+	position:absolute;
+	z-index:6;
+	box-sizing:border-box;
+	width:10px;
+	height:10px;
+	border-top:1px solid var(--surface-border);
+	border-left:1px solid var(--surface-border);
+	background:var(--surface);
+	transform:rotate(45deg);
+	pointer-events:none;
 }
+
+.app-drop-arrow[hidden] {
+	display:none;
+}
+
+#app-view-arrow {
+	position:fixed;
+	z-index:31;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu {
+	top:calc(100% + 8px);
+}
+
+#panel.app-docked .app-discussion-meta .app-drop-arrow {
+	top:calc(100% + 3px);
+	left:calc(50% - 5px);
+}
+
+#panel.app-docked .app-discussion-meta .source-menu.hidden + .app-drop-arrow {
+	display:none;
+}
+
+#app-article-actions .app-vote-more::after,
+#panel.app-docked .compose-dock::before {
+	content:"";
+	position:absolute;
+	z-index:1;
+	box-sizing:border-box;
+	width:10px;
+	height:10px;
+	border-top:1px solid var(--surface-border);
+	border-left:1px solid var(--surface-border);
+	background:var(--surface);
+	transform:rotate(45deg);
+	pointer-events:none;
+}
+
+#app-article-actions .app-vote-more::after {
+	top:3px;
+	left:calc(50% - 5px);
+}
+
+#panel.app-docked .compose-dock::before {
+	top:-6px;
+	right:var(--arrow-right, 10px);
+}
+
+.app-discussion-meta svg {
+	display:block;
+}
+
 
 #panel.app-docked .app-discussion-meta .source-menu {
 	left:auto;
@@ -24601,6 +25521,46 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	padding-top:10px;
 }
 
+#panel.app-docked {
+	--live-ink:var(--header-text);
+}
+
+#panel.app-docked .app-discussion-meta .live-pill {
+	color:var(--live-ink);
+}
+
+#panel.app-docked .app-discussion-meta .choice-group.app-live-group {
+	padding-top:0;
+	border-top:0;
+}
+
+#panel.app-docked .app-discussion-meta .app-live-group .choice-head {
+	display:flex;
+	align-items:center;
+	gap:6px;
+}
+
+#panel.app-docked .app-discussion-meta .app-live-group .choice-head::after,
+#panel.app-docked .app-discussion-meta .app-live-group::after {
+	content:"";
+	height:1px;
+	background:rgba(var(--accent-rgb),.5);
+}
+
+#panel.app-docked .app-discussion-meta .app-live-group .choice-head::after {
+	flex:1 0 24px;
+}
+
+#panel.app-docked .app-discussion-meta .app-live-group::after {
+	display:block;
+	margin-top:8px;
+}
+
+#panel.app-docked .app-discussion-meta .app-live-group + .choice-group {
+	padding-top:0;
+	border-top:0;
+}
+
 #panel.app-docked .app-discussion-meta .choice-head,
 #panel.app-docked .app-discussion-meta .choice-sub-head {
 	margin:0 0 4px;
@@ -24621,66 +25581,164 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	font-size:inherit;
 }
 
-.app-discussion-status:empty {
-	display:none;
-}
 
-#panel.app-docked .app-discussion-meta .app-discussion-status {
-	max-height:none;
-	margin:3px 0 0 23px;
-	padding:0;
-	border:0;
-	color:var(--muted);
-	font-size:11px;
-	white-space:normal;
-}
-
-#panel.app-docked .app-discussion-meta .source-menu > .app-discussion-status:only-child {
-	margin:0;
-}
 
 #panel.app-docked #header-subtitle,
 #panel.app-docked .page-header-title,
-#panel.app-docked .page-header-meta {
+#panel.app-docked .page-header-meta,
+#panel.app-docked #comments-content > .page-header {
 	display:none;
 }
 
-#panel.app-docked #comment-toggle {
-	position:absolute;
-	right:6px;
-	bottom:6px;
-	z-index:8;
-	display:flex;
+#panel.app-docked .filter-banner {
+	margin-top:0;
+}
+
+#panel.app-docked .filter-banner-head {
+	flex-wrap:nowrap;
+	align-items:center;
+	gap:2px;
+	min-height:24px;
+	box-sizing:border-box;
+	padding:2px 2px 2px 9px;
+	border-radius:8px 8px 0 0;
+	background:var(--rail-bg);
+	color:rgba(255,255,255,.72);
+	font:11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+
+#panel.app-docked .filter-banner-title {
+	flex:1 1 auto;
+	min-width:0;
+	color:inherit;
+	font:inherit;
+}
+
+#panel.app-docked .filter-banner-icon {
+	flex:0 0 auto;
+	display:inline-flex;
 	align-items:center;
 	justify-content:center;
-	width:32px;
-	height:32px;
+	width:20px;
+	height:20px;
 	padding:0;
 	border:0;
-	border-radius:8px;
-	background:var(--accent);
-	color:#fff;
-	box-shadow:0 6px 18px rgba(0,0,0,.24);
+	border-radius:4px;
+	background:none;
+	color:inherit;
+	text-decoration:none;
 	cursor:pointer;
+}
+
+#panel.app-docked .filter-banner-icon svg {
+	display:block;
+}
+
+#panel.app-docked .filter-banner-close::before {
+	content:none;
+}
+
+@media (hover: hover) {
+	#panel.app-docked .filter-banner-icon:hover {
+		background:rgba(255,255,255,.16);
+		color:#fff;
+	}
+}
+
+#panel.app-docked .filter-banner-icon:active {
+	background:rgba(255,255,255,.26);
+	color:#fff;
+}
+
+#panel.app-docked .filter-banner-quote {
+	margin-top:0;
+	border-radius:0 0 8px 8px;
+}
+
+#panel.app-docked .filter-banner-quote.app-focus-post {
+	padding:8px 12px 9px;
+	color:var(--meta);
+	font-style:normal;
+}
+
+.app-focus-post-title {
+	color:var(--text);
+	font-size:13px;
+	line-height:1.3;
+}
+
+.app-focus-post-site {
+	color:var(--meta);
+	font-size:11px;
+}
+
+.app-focus-post-meta {
+	padding-top:1px;
+	color:var(--meta);
+	font-size:10px;
+	line-height:1.15;
+}
+
+.app-focus-post-meta a {
+	color:var(--meta);
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
+}
+
+@media (hover: hover) {
+	.app-focus-post-meta a:hover {
+		text-decoration:underline;
+	}
+}
+
+#panel.app-docked .header-actions {
+	gap:2px;
+}
+
+#panel.app-docked #comment-toggle {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	width:24px;
+	height:24px;
+	padding:0;
+	border:0;
+	border-radius:5px;
+	cursor:pointer;
+}
+
+#panel.app-docked #comment-toggle svg {
+	width:15px;
+	height:15px;
 }
 
 #panel.app-docked #comment-toggle[hidden] {
 	display:none;
 }
 
-#panel.app-docked #comment-toggle.is-open {
-	display:none;
+#panel.app-docked #comment-toggle .app-icon-on {
+	display:var(--pressed-solid);
+}
+
+#panel.app-docked #comment-toggle .app-icon-off {
+	display:var(--pressed-hollow);
+}
+
+#panel.app-docked #comment-toggle .app-icon-off path {
+	fill:var(--pressed-fill);
 }
 
 #panel.app-docked .compose-dock {
-	top:auto;
+	top:45px;
 	left:auto;
-	right:6px;
-	bottom:6px;
-	width:calc(100% - 12px);
+	right:8px;
+	bottom:auto;
+	width:calc(100% - 16px);
 	max-width:520px;
 	transform:none;
-	transform-origin:100% 100%;
+	transform-origin:calc(100% - 12px) 0;
 	box-shadow:0 10px 28px rgba(0,0,0,.22);
 }
 
@@ -24703,33 +25761,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 #panel.app-docked .compose-dock-close {
-	position:absolute;
-	top:4px;
-	right:4px;
-	z-index:1;
-	display:flex;
-	align-items:center;
-	justify-content:center;
-	width:18px;
-	height:18px;
-	padding:0;
-	border:0;
-	border-radius:4px;
-	background:none;
-	color:var(--meta);
-	font:16px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	cursor:pointer;
-}
-
-@media (hover: hover) {
-	#panel.app-docked .compose-dock-close:hover {
-		background:var(--hover-tint);
-		color:var(--text);
-	}
-}
-
-#panel.app-docked .compose-dock {
-	padding-top:22px;
+	display:none;
 }
 
 #panel.app-docked #comments-content > .compose-box,
@@ -24737,12 +25769,12 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	display:none;
 }
 
-#panel.app-docked .header-actions button {
+#panel.app-docked .header-actions button:not(.app-head-icon) {
 	color:var(--meta);
 }
 
 @media (hover: hover) {
-	#panel.app-docked .header-actions button:hover {
+	#panel.app-docked .header-actions button:not(.app-head-icon):hover {
 		color:var(--text);
 	}
 }
@@ -24811,6 +25843,78 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	text-align:center;
 }
 
+#app .app-head-icon {
+	background:none;
+	color:var(--meta);
+	--pressed-fill:none;
+	--pressed-layer:none;
+	--pressed-knock:currentColor;
+	--pressed-solid:none;
+	--pressed-hollow:inline;
+}
+
+#app .app-head-icon:disabled {
+	opacity:.33;
+	cursor:default;
+}
+
+@media (hover: hover) {
+	#app .app-head-icon:hover:where(:not(:disabled)) {
+		background:var(--hover-tint);
+		color:var(--text);
+	}
+
+	#app-article-actions .app-vote-more .app-head-icon:hover:where(:not(:disabled)) {
+		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--surface);
+	}
+}
+
+#app .app-head-icon:active:where(:not(:disabled)),
+#app .app-head-icon:is([aria-pressed="true"], [aria-expanded="true"], .item-action-on, .vote-button-active, .is-on, .is-open, .is-filtered):where(:not(:disabled)) {
+	background:var(--active-tint);
+	color:var(--icon-on);
+	--pressed-fill:var(--icon-fill);
+	--pressed-layer:block;
+	--pressed-knock:var(--icon-knock);
+	--pressed-solid:var(--icon-solid);
+	--pressed-hollow:var(--icon-hollow);
+}
+
+#app-article-actions .app-vote-more .app-head-icon:active:where(:not(:disabled)),
+#app-article-actions .app-vote-more .app-head-icon.vote-button-active:where(:not(:disabled)) {
+	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--surface);
+}
+
+@media (hover: hover) {
+	#app .app-head-icon:is([aria-pressed="true"], [aria-expanded="true"], .item-action-on, .vote-button-active, .is-on, .is-open, .is-filtered):is(:hover, :active):where(:not(:disabled)) {
+		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--active-tint);
+	}
+
+	#app-article-actions .app-vote-more .app-head-icon.vote-button-active:is(:hover, :active):where(:not(:disabled)) {
+		background:linear-gradient(var(--hover-tint), var(--hover-tint)), linear-gradient(var(--active-tint), var(--active-tint)) var(--surface);
+	}
+}
+
+#app-mark-read circle {
+	fill:var(--pressed-fill);
+}
+
+@media (hover: hover) {
+	#app .stepper-button:enabled:hover {
+		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--help-bg);
+		color:var(--text);
+	}
+}
+
+#app .stepper-button:enabled:active {
+	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--help-bg);
+	color:var(--text);
+}
+
+#app .stepper-button:disabled {
+	opacity:.33;
+}
+
 header .item-action-link {
 	color:inherit;
 	text-decoration-color:currentColor;
@@ -24822,7 +25926,8 @@ header .item-action-link {
 
 @media (min-width: 701px) {
 	#panel.app-docked .story-table tr:has(> .story-title-cell),
-	#panel.app-docked .story-text {
+	#panel.app-docked .story-text,
+	#panel.app-docked .submission-details {
 		display:none;
 	}
 }
@@ -25219,14 +26324,38 @@ header .item-action-link {
 		'<path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>',
 	);
 
-	const APP_PANE_ICON = (x) =>
-		`<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="1.4" y="2.7" width="13.2" height="10.6" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect class="pane-fill" x="${x}" y="3.9" width="3.4" height="8.2" rx="1" fill="currentColor"/></svg>`;
+	const APP_SYNC_ICON =
+		'<svg viewBox="-2 -2 20 20" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12.7 6.29A5 5 0 0 0 4.17 4.79M3.3 9.71A5 5 0 0 0 11.83 11.21" fill="none" stroke="currentColor" stroke-width="1.31" stroke-linecap="round"/><path d="M3 7.91L3.4 4.14L6.01 6.33ZM13 8.09L12.6 11.86L9.99 9.67Z" fill="currentColor" stroke="currentColor" stroke-width=".5" stroke-linejoin="round"/></svg>';
 
-	const APP_LIST_TOGGLE_ICON = APP_PANE_ICON("2.7");
-	const APP_DISCUSSION_TOGGLE_ICON = APP_PANE_ICON("9.9");
+	const APP_MARK_READ_ICON =
+		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="4.55" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11.45" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.01 7.76Q8 6.76 8.99 7.76" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.92 8.07L4.15 3.8l0.85 0.6M14.08 8.07L11.85 3.8l-0.85 0.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-	const APP_BRAND_ICON = (d, rule = "nonzero") =>
-		`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
+	const APP_COMMENT_ICON =
+		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><g class="app-icon-off"><path d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="5.3" cy="6.75" r=".85" fill="currentColor"/><circle cx="8" cy="6.75" r=".85" fill="currentColor"/><circle cx="10.7" cy="6.75" r=".85" fill="currentColor"/></g><g class="app-icon-on"><path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/></g></svg>';
+
+	const APP_DISCUSSIONS_ICON = '<span class="app-people" aria-hidden="true"></span>';
+
+	const APP_CLOSE_ICON =
+		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+	const APP_OPEN_ICON =
+		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M9.6 2.4h4v4M13.6 2.4 7.8 8.2M11.6 9.4v3.1a1.1 1.1 0 0 1-1.1 1.1H3.5a1.1 1.1 0 0 1-1.1-1.1V5.5a1.1 1.1 0 0 1 1.1-1.1h3.1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+	const APP_HEAD_TITLES = {
+		watch: "Watch",
+		unwatch: "Stop watching",
+		favorite: "Favorite",
+		unfavorite: "Unfavorite",
+	};
+
+	const APP_PANE_ICON = (region, divider) =>
+		`<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path class="pane-fill" d="${region}"/><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="${divider}" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
+
+	const APP_LIST_TOGGLE_ICON = APP_PANE_ICON("M6.3 3.3H4a2 2 0 0 0-2 2v5.4a2 2 0 0 0 2 2h2.3z", "M6.3 3.3v9.4");
+	const APP_DISCUSSION_TOGGLE_ICON = APP_PANE_ICON("M9.7 3.3H12a2 2 0 0 1 2 2v5.4a2 2 0 0 1-2 2H9.7z", "M9.7 3.3v9.4");
+
+	const APP_BRAND_ICON = (d, rule = "nonzero", size = 18) =>
+		`<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
 
 	const APP_SOURCE_ICONS = {
 		hn: '<span class="rail-hn" aria-hidden="true">HN</span>',
@@ -25242,17 +26371,35 @@ header .item-action-link {
 		lemmy: APP_BRAND_ICON(
 			"M2.9595 4.2228a3.9132 3.9132 0 0 0-.332.019c-.8781.1012-1.67.5699-2.155 1.3862-.475.8-.5922 1.6809-.35 2.4971.2421.8162.8297 1.5575 1.6982 2.1449.0053.0035.0106.0076.0163.0114.746.4498 1.492.7431 2.2877.8994-.02.3318-.0272.6689-.006 1.0181.0634 1.0432.4368 2.0006.996 2.8492l-2.0061.8189a.4163.4163 0 0 0-.2276.2239.416.416 0 0 0 .0879.455.415.415 0 0 0 .2941.1231.4156.4156 0 0 0 .1595-.0312l2.2093-.9035c.408.4859.8695.9315 1.3723 1.318.0196.0151.0407.0264.0603.0423l-1.2918 1.7103a.416.416 0 0 0 .664.501l1.314-1.7385c.7185.4548 1.4782.7927 2.2294 1.0242.3833.7209 1.1379 1.1871 2.0202 1.1871.8907 0 1.6442-.501 2.0242-1.2072.744-.2347 1.4959-.5729 2.2073-1.0262l1.332 1.7606a.4157.4157 0 0 0 .7439-.1936.4165.4165 0 0 0-.0799-.3074l-1.3099-1.7345c.0083-.0075.0178-.0113.0261-.0188.4968-.3803.9549-.8175 1.3622-1.2939l2.155.8794a.4156.4156 0 0 0 .5412-.2276.4151.4151 0 0 0-.2273-.5432l-1.9438-.7928c.577-.8538.9697-1.8183 1.0504-2.8693.0268-.3507.0242-.6914.0079-1.0262.7905-.1572 1.5321-.4502 2.2737-.8974.0053-.0033.011-.0076.0163-.0113.8684-.5874 1.456-1.3287 1.6982-2.145.2421-.8161.125-1.697-.3501-2.497-.4849-.8163-1.2768-1.2852-2.155-1.3863a3.2175 3.2175 0 0 0-.332-.0189c-.7852-.0151-1.6231.229-2.4286.6942-.5926.342-1.1252.867-1.5433 1.4387-1.1699-.6703-2.6923-1.0476-4.5635-1.0785a15.5768 15.5768 0 0 0-.5111 0c-2.085.034-3.7537.43-5.0142 1.1449-.0033-.0038-.0045-.0114-.008-.0152-.4233-.5916-.973-1.1365-1.5835-1.489-.8055-.465-1.6434-.7083-2.4286-.6941ZM8.3641 12.8327c-.6053 0-1.0966.4903-1.0966 1.0966 0 .6063.4913 1.0986 1.0966 1.0986s1.0966-.4923 1.0966-1.0986c0-.6063-.4913-1.0966-1.0966-1.0966zm7.2819.0113c-.5998 0-1.0866.4859-1.0866 1.0866s.4868 1.0885 1.0866 1.0885c.5997 0 1.0865-.4878 1.0865-1.0885s-.4868-1.0866-1.0865-1.0866zM12 16.0835c1.0237 0 1.5654.638 1.5634 1.4829-.0018.7849-.6723 1.485-1.5634 1.485-.9167 0-1.54-.5629-1.5634-1.493-.0212-.8347.5397-1.4749 1.5634-1.4749Z",
 			"evenodd",
+			21,
 		),
 	};
 
+	const APP_FILLED_VIEWS = ["queue", "watching", "collection"];
+
 	function appRailButtonHTML(id, label, inner) {
-		return `<button class="rail-button" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
+		return `<button class="rail-button${APP_FILLED_VIEWS.includes(id) ? " rail-empty" : ""}" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
 	}
 
 	function appShellOpenHTML() {
 		return `<div id="app" data-stage="list">
 <div id="app-tip" class="app-tip" role="tooltip" hidden></div>
 <div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
+<div id="app-view-arrow" class="app-drop-arrow" aria-hidden="true" hidden></div>
+<div id="app-view-menu" class="app-view-menu" role="dialog" aria-label="Text settings" hidden>
+<div class="settings-head"><span class="settings-crumb-root">Text</span></div>
+<div class="settings-field">
+<div class="settings-field-label">Text size</div>
+<div class="stepper">
+<button id="app-zoom-out" type="button" class="stepper-button" aria-label="Smaller text">&#8722;</button>
+<span class="stepper-value">
+<input id="app-zoom-level" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Text size in percent" value="100">
+<span class="stepper-unit">%</span>
+</span>
+<button id="app-zoom-in" type="button" class="stepper-button" aria-label="Bigger text">+</button>
+</div>
+</div>
+</div>
 <nav id="app-rail" aria-label="Views">
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
 <div id="app-rail-rule" class="rail-rule" aria-hidden="true"></div>
@@ -25261,16 +26408,30 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
 </nav>
 <section id="app-list" aria-label="Articles">
-<div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions"><button id="app-list-sync" class="item-action-link" type="button">sync</button><button id="app-mark-read" class="item-action-link" type="button">mark all read</button></span></div>
+<div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
 <div id="app-list-body"></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; articles</button><button id="app-toggle-list" class="app-pane-toggle app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><a id="app-article-open" class="item-action-link" target="_blank" rel="noopener" hidden>open</a><span class="app-zoom app-wide-only" hidden><button id="app-zoom-out" type="button" aria-label="Smaller text">&#8722;</button><span id="app-zoom-level">100%</span><button id="app-zoom-in" type="button" aria-label="Bigger text">+</button></span></span><button id="app-toggle-discussion" class="app-pane-toggle app-wide-only" type="button" aria-pressed="true">${APP_DISCUSSION_TOGGLE_ICON}</button><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
+<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; articles</button><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><span id="app-article-tools-sep" class="app-head-sep" aria-hidden="true" hidden>|</span><button id="app-view-toggle" class="app-head-icon app-view-toggle app-wide-only" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 </section>
 ${settingsPanelHTML()}
+<div id="app-settings-modal" class="app-settings-modal" hidden>
+<div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
+<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
+<div class="app-settings-body">
+<nav class="app-settings-nav" aria-label="Settings sections">
+<button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
+</nav>
+<div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
+</div>
+</div>
+</div>
 `;
 	}
 
@@ -25290,6 +26451,8 @@ ${settingsPanelHTML()}
 			open: null,
 			article: null,
 			listSeq: 0,
+			countSeq: 0,
+			railFilled: null,
 		};
 	}
 
@@ -25325,14 +26488,44 @@ ${settingsPanelHTML()}
 	function wireApp(ui) {
 		const shadow = ui.shadow;
 
-		ui.headerSubtitle = appDiscussionStatus();
+		ui.headerSubtitle = null;
 
-		for (const selector of ["#comment-toggle", "#compose-dock"]) {
-			const element = shadow.querySelector(selector);
+		const dock = shadow.querySelector("#compose-dock");
+		const commentToggle = shadow.querySelector("#comment-toggle");
 
-			if (element) {
-				shadow.querySelector("#panel").appendChild(element);
-			}
+		if (dock) {
+			shadow.querySelector("#panel").appendChild(dock);
+		}
+
+		const clearFilter = shadow.querySelector("#clear-filter");
+
+		if (clearFilter) {
+			const openFocused = document.createElement("a");
+
+			openFocused.id = "filter-banner-open";
+			openFocused.className = "filter-banner-icon";
+			openFocused.target = "_blank";
+			openFocused.rel = "noopener";
+			openFocused.hidden = true;
+			openFocused.innerHTML = APP_OPEN_ICON;
+			clearFilter.classList.add("filter-banner-icon");
+			clearFilter.innerHTML = APP_CLOSE_ICON;
+			clearFilter.setAttribute("aria-label", "Show all comments");
+			clearFilter.title = "Show all comments";
+			clearFilter.before(openFocused);
+		}
+
+		if (commentToggle) {
+			commentToggle.innerHTML = APP_COMMENT_ICON;
+			commentToggle.classList.add("app-head-icon");
+			commentToggle.addEventListener("click", () => {
+				requestAnimationFrame(() => {
+					const panel = shadow.querySelector("#panel").getBoundingClientRect();
+					const box = commentToggle.getBoundingClientRect();
+
+					dock?.style.setProperty("--arrow-right", `${Math.round(panel.right - 8 - 6 - (box.left + box.width / 2))}px`);
+				});
+			});
 		}
 
 		shadow.querySelector("#app-rail").addEventListener("click", (event) => {
@@ -25473,26 +26666,68 @@ ${settingsPanelHTML()}
 		const zoomOut = shadow.querySelector("#app-zoom-out");
 		const zoomIn = shadow.querySelector("#app-zoom-in");
 		const zoomLevel = shadow.querySelector("#app-zoom-level");
+		const viewToggle = shadow.querySelector("#app-view-toggle");
+		const viewMenu = shadow.querySelector("#app-view-menu");
 		let zoomAt = APP_ZOOM_STEPS.indexOf(1);
 
 		const paintAppZoom = () => {
 			const zoom = APP_ZOOM_STEPS[zoomAt];
 
 			shadow.host.style.setProperty("--app-zoom", String(zoom));
-			zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+			zoomLevel.value = String(Math.round(zoom * 100));
 			zoomOut.disabled = zoomAt === 0;
 			zoomIn.disabled = zoomAt === APP_ZOOM_STEPS.length - 1;
+			paintAppFrameFit();
 		};
 
-		const stepAppZoom = (step) => {
-			zoomAt = Math.min(APP_ZOOM_STEPS.length - 1, Math.max(0, zoomAt + step));
+		const setAppZoomAt = (at) => {
+			zoomAt = Math.min(APP_ZOOM_STEPS.length - 1, Math.max(0, at));
 			paintAppZoom();
 			save(STORAGE.appZoom, APP_ZOOM_STEPS[zoomAt]).catch(console.error);
 		};
 
-		zoomOut.onclick = () => stepAppZoom(-1);
-		zoomIn.onclick = () => stepAppZoom(1);
+		zoomOut.onclick = () => setAppZoomAt(zoomAt - 1);
+		zoomIn.onclick = () => setAppZoomAt(zoomAt + 1);
+		zoomLevel.addEventListener("change", () => {
+			const percent = parseFloat(zoomLevel.value);
+
+			if (!Number.isFinite(percent)) {
+				paintAppZoom();
+				return;
+			}
+
+			setAppZoomAt(
+				APP_ZOOM_STEPS.reduce(
+					(best, step, index) =>
+						Math.abs(step * 100 - percent) < Math.abs(APP_ZOOM_STEPS[best] * 100 - percent) ? index : best,
+					0,
+				),
+			);
+		});
+		zoomLevel.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				zoomLevel.blur();
+			}
+		});
 		paintAppZoom();
+
+		viewToggle.onclick = () => setAppViewMenuOpen(viewMenu.hidden);
+		viewMenu.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") {
+				setAppViewMenuOpen(false);
+				viewToggle.focus();
+			}
+		});
+		shadow.addEventListener("pointerdown", (event) => {
+			const path = event.composedPath();
+
+			if (!viewMenu.hidden && !path.includes(viewMenu) && !path.includes(viewToggle)) {
+				setAppViewMenuOpen(false);
+			}
+		});
+		window.addEventListener("blur", () => setAppViewMenuOpen(false));
+		window.addEventListener("resize", () => placeAppViewMenu());
 		load(STORAGE.appZoom, null)
 			.then((zoom) => {
 				const at = APP_ZOOM_STEPS.indexOf(Number(zoom));
@@ -25503,6 +26738,10 @@ ${settingsPanelHTML()}
 				}
 			})
 			.catch(console.error);
+
+		if (typeof ResizeObserver === "function") {
+			new ResizeObserver(() => paintAppFrameFit()).observe(shadow.querySelector("#app-article-body"));
+		}
 
 		listToggle.onclick = () => setPaneHidden("list", !paneHidden.list);
 		discussionToggle.onclick = () => setPaneHidden("discussion", !paneHidden.discussion);
@@ -25641,8 +26880,37 @@ ${settingsPanelHTML()}
 		listPane.addEventListener("touchend", endPull);
 		listPane.addEventListener("touchcancel", endPull);
 
-		shadow.querySelector("#app-list-sync").onclick = () => {
-			renderAppList({ force: true }).catch(console.error);
+		shadow.querySelector("#app-list-sync").onclick = async (event) => {
+			const button = event.currentTarget;
+
+			if (button.classList.contains("is-syncing")) {
+				return;
+			}
+
+			button.classList.add("is-syncing");
+			button.setAttribute("aria-busy", "true");
+
+			const runs = await Promise.allSettled([
+				renderAppList({ force: true }),
+				Promise.resolve(appState?.discussionSync?.()),
+			]);
+
+			for (const run of runs) {
+				if (run.status === "rejected") {
+					console.error(run.reason);
+				}
+			}
+
+			const spin = button.querySelector(".app-sync-glyph")?.getAnimations?.()[0];
+			const turn = Number(spin?.effect?.getComputedTiming?.().duration) || 0;
+
+			if (spin && turn > 0 && Number.isFinite(spin.currentTime)) {
+				spin.effect.updateTiming({ iterations: Math.max(1, Math.ceil((spin.currentTime + 1) / turn)) });
+				await spin.finished.catch(() => {});
+			}
+
+			button.classList.remove("is-syncing");
+			button.removeAttribute("aria-busy");
 		};
 
 		shadow.querySelector("#app-article-open").onclick = () => {
@@ -25699,8 +26967,157 @@ ${settingsPanelHTML()}
 		rail.addEventListener("scroll", hideAppTip);
 		rail.addEventListener("click", hideAppTip);
 
+		wireAppSettingsModal(shadow);
 		document.addEventListener("keydown", onAppKey);
 		window.addEventListener("message", onAppMessage);
+	}
+
+	function wireAppSettingsModal(shadow) {
+		const modal = shadow.querySelector("#app-settings-modal");
+		const content = shadow.querySelector("#app-settings-content");
+		const panel = shadow.querySelector("#settings-panel");
+		const gear = shadow.querySelector("#settings-toggle");
+		const app = shadow.querySelector("#app");
+
+		if (!modal || !content || !panel || !gear || !app) {
+			return;
+		}
+
+		const toggleDropdown = gear.onclick;
+		const tabs = [...modal.querySelectorAll("[data-settings-section]")];
+		const nav = modal.querySelector(".app-settings-nav");
+		const credits = panel.querySelector(".settings-credits");
+		const report = credits?.querySelector('a[href$="/issues"]');
+
+		if (report) {
+			report.innerHTML = '<span class="settings-credits-label">Report an issue</span><svg class="settings-credits-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M5.6 6.2a2.4 2.4 0 0 1 4.8 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><rect x="4.7" y="6.2" width="6.6" height="7.6" rx="3.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8.2v5.4M4.7 8.4 2.6 7.2M4.7 10.6H2.4M5 12.6l-2 1.3M11.3 8.4l2.1-1.2M11.3 10.6h2.3M11 12.6l2 1.3M6.3 4.3 5.3 2.8M9.7 4.3l1-1.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+			report.setAttribute("aria-label", "Report an issue");
+			report.title = "Report an issue";
+		}
+
+		for (const group of panel.querySelectorAll(".settings-pane-primary > .settings-group")) {
+			if (group.querySelector(".settings-link-button")) {
+				group.dataset.appSection = "links";
+			} else if (group.querySelector("#setting-auto-open-sidebar")) {
+				group.dataset.appSection = "sidebar";
+			} else if (group.querySelector(".button-designer")) {
+				for (const field of group.querySelectorAll(":scope > .settings-field")) {
+					field.dataset.appSection = field.querySelector(".button-designer") ? "sidebar" : "general";
+				}
+			} else {
+				group.dataset.appSection = "general";
+			}
+		}
+
+		content.append(panel);
+
+		if (credits) {
+			nav?.append(credits);
+		}
+
+		const showSection = (section) => {
+			const tab = tabs.find((each) => each.dataset.settingsSection === section) || tabs[0];
+			const panes = panel.querySelector(".settings-panes");
+
+			modal.dataset.section = tab.dataset.settingsSection;
+			shadow.querySelector("#app-settings-heading").textContent = tab.textContent.trim();
+
+			for (const each of tabs) {
+				if (each === tab) {
+					each.setAttribute("aria-current", "page");
+				} else {
+					each.removeAttribute("aria-current");
+				}
+			}
+
+			if (tab.dataset.settingsSection === "sources") {
+				shadow.querySelector("#settings-manage-sources")?.click();
+			} else if (tab.dataset.settingsSection === "blocked") {
+				shadow.querySelector("#settings-manage-blocked")?.click();
+			} else if (panes?.classList.contains("is-secondary")) {
+				shadow.querySelector("#settings-crumb-root")?.click();
+			}
+
+			content.scrollTop = 0;
+		};
+
+		const setOpen = (open) => {
+			if (open === !modal.hidden) {
+				return;
+			}
+
+			if (open) {
+				content.append(panel);
+
+				if (credits) {
+					nav?.append(credits);
+				}
+
+				modal.hidden = false;
+
+				if (panel.classList.contains("hidden")) {
+					toggleDropdown?.(new Event("click"));
+				}
+
+				showSection("general");
+				tabs[0].focus({ preventScroll: true });
+				return;
+			}
+
+			modal.hidden = true;
+
+			if (!panel.classList.contains("hidden")) {
+				toggleDropdown?.(new Event("click"));
+			}
+
+			gear.focus({ preventScroll: true });
+		};
+
+		gear.onclick = (event) => {
+			if (appIsPhone()) {
+				if (panel.parentElement !== app) {
+					app.append(panel);
+				}
+
+				if (credits && credits.parentElement !== panel) {
+					panel.append(credits);
+				}
+
+				toggleDropdown?.(event);
+				return;
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+			setOpen(modal.hidden);
+		};
+
+		for (const tab of tabs) {
+			tab.onclick = () => showSection(tab.dataset.settingsSection);
+		}
+
+		shadow.querySelector("#app-settings-close").onclick = () => setOpen(false);
+
+		modal.addEventListener("click", (event) => {
+			event.stopPropagation();
+
+			if (event.target === modal) {
+				setOpen(false);
+			}
+		});
+
+		modal.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				setOpen(false);
+			}
+		});
+
+		new MutationObserver(() => {
+			if (!modal.hidden && panel.classList.contains("hidden")) {
+				modal.hidden = true;
+			}
+		}).observe(panel, { attributes: true, attributeFilter: ["class"] });
 	}
 
 	async function refreshAppSources() {
@@ -25780,6 +27197,10 @@ ${settingsPanelHTML()}
 
 			button.classList.toggle("is-current", current);
 			button.setAttribute("aria-pressed", String(current));
+		}
+
+		if (state.railFilled) {
+			paintAppRailFill(state.railFilled);
 		}
 
 		state.ui.shadow.querySelector("#app-mark-read").hidden = !appViewIsFrontPage(state.view);
@@ -25862,6 +27283,11 @@ ${settingsPanelHTML()}
 
 		hideAppTip();
 		arrow.hidden = !open;
+
+		if (panel.closest("#app-settings-modal")) {
+			arrow.hidden = true;
+			return;
+		}
 
 		if (!open) {
 			return;
@@ -26069,9 +27495,26 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const [queue, watches] = await Promise.all([loadQueue(), loadWatches()]);
-		const { queued } = splitQueueEntries(queue, watches);
+		const seq = ++state.countSeq;
+		const [queue, watches, favorites, notes] = await Promise.all([
+			loadQueue(),
+			loadWatches(),
+			loadFavoriteEntries(),
+			loadCollectedNotes(),
+		]);
+
+		if (seq !== state.countSeq) {
+			return;
+		}
+
+		const { queued, watched } = splitQueueEntries(queue, watches);
 		const counts = appViewCounts(state.rows, state.seen, state.sourceIds);
+
+		paintAppRailFill({
+			queue: queued.length > 0,
+			watching: watched.length > 0,
+			collection: favorites.length + notes.length > 0,
+		});
 		const badges = {
 			unread: counts.unread,
 			all: counts.all,
@@ -26087,6 +27530,33 @@ ${settingsPanelHTML()}
 			const value = badges[badge.dataset.appBadge] || 0;
 
 			badge.textContent = value ? (value > 999 ? "999+" : String(value)) : "";
+		}
+	}
+
+	function paintAppRailFill(filled) {
+		const state = appState;
+		const settled = state.railFilled !== null;
+
+		state.railFilled = filled;
+
+		for (const id of APP_FILLED_VIEWS) {
+			const button = state.ui.shadow.querySelector(`#app-rail [data-app-view="${id}"]`);
+
+			if (!button) {
+				continue;
+			}
+
+			const was = !button.classList.contains("rail-empty");
+			const show = Boolean(filled[id]) || state.view === id;
+
+			button.classList.toggle("rail-empty", !show);
+
+			if (show && !was && settled) {
+				button.classList.remove("rail-arriving");
+				void button.offsetWidth;
+				button.classList.add("rail-arriving");
+				button.addEventListener("animationend", () => button.classList.remove("rail-arriving"), { once: true });
+			}
 		}
 	}
 
@@ -26162,6 +27632,7 @@ ${settingsPanelHTML()}
 		const shell = state.ui.shadow.querySelector("#app");
 
 		if (!shell.classList.contains("has-story")) {
+			state.ui.shadow.querySelector("#app-toggle-discussion").disabled = false;
 			shell.classList.add("has-story", "discussion-entering");
 			setTimeout(() => shell.classList.remove("discussion-entering"), 320);
 		}
@@ -26218,7 +27689,9 @@ ${settingsPanelHTML()}
 		waiting.className = "browse-empty app-discussion-empty";
 		waiting.textContent = "Finding what people said…";
 		body.replaceChildren(waiting);
+		appState.discussionSync = null;
 		appState.ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
+		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
 	}
 
 	async function openAppDiscussion(row, { focus = "" } = {}) {
@@ -26313,8 +27786,12 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		const votes =
+			story.id && getSource(story.source)?.capabilities.vote
+				? `<span class="vote-controls app-head-votes hidden" data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}" data-hn-vote-story-id="${escapeHTML(String(story.id))}" data-hn-vote-item-id="${escapeHTML(String(story.id))}"></span>`
+				: "";
 		const favorite = story.id
-			? `<span class="app-head-sep">|</span>${favoriteButtonHTML({
+			? `${favoriteButtonHTML({
 					key: favoriteKeyFor(story),
 					url: story.url,
 					title: story.title,
@@ -26325,55 +27802,97 @@ ${settingsPanelHTML()}
 				})}`
 			: "";
 
-		holder.innerHTML = `<button class="item-action-link app-head-watch" type="button">watch</button>${favorite}<span class="app-head-sep">|</span><button class="item-action-link app-head-queue" type="button">queue</button><span class="app-head-sep">|</span><button class="item-action-link app-head-hide" type="button">hide</button>`;
+		holder.innerHTML = `<span class="app-head-group app-head-reading">${votes}<button class="item-action-link app-head-icon app-head-watch" type="button">watch</button>${favorite}</span>`;
+		holder.querySelector('[data-item-action="fave"]')?.classList.add("app-head-icon");
+
+		const titleActions = () => {
+			for (const button of holder.querySelectorAll("button:not(.vote-button)")) {
+				const label = button.textContent.trim();
+
+				button.title = APP_HEAD_TITLES[label] || label;
+			}
+		};
+
+		if (!state.headTitles) {
+			state.headTitles = new MutationObserver(titleActions);
+			state.headTitles.observe(holder, { childList: true, characterData: true, subtree: true });
+		}
+
+		titleActions();
+
+		const voteSlot = holder.querySelector(".app-head-votes");
+
+		if (voteSlot) {
+			const cached = voteLinkCache.get(String(story.id));
+
+			if (cached instanceof Map) {
+				renderVoteControls(voteSlot, story.id, story.id, cached.get(String(story.id)));
+			}
+
+			loadVoteState(story.source, story.id)
+				.then((links) => {
+					if (voteSlot.isConnected) {
+						renderVoteControls(voteSlot, story.id, story.id, links.get(String(story.id)));
+					}
+				})
+				.catch(console.error);
+		}
 
 		const relist = () => renderAppList().catch(console.error);
 
 		wireRowWatchLink(holder.querySelector(".app-head-watch"), story, { reload: relist });
 
-		const queueButton = holder.querySelector(".app-head-queue");
-		const key = queueKey(story);
-		const paintQueued = (queued) => {
-			queueButton.textContent = queued ? "queued" : "queue";
-			queueButton.classList.toggle("item-action-on", queued);
-		};
-
-		loadQueue()
-			.then((entries) => paintQueued(entries.some((entry) => queueKey(entry) === key)))
-			.catch(console.error);
-
-		queueButton.onclick = async () => {
-			let queued = false;
-
-			await mutateQueue((entries) => {
-				queued = !entries.some((entry) => queueKey(entry) === key);
-
-				return queued ? addToQueue(entries, story, Date.now()) : removeFromQueue(entries, key);
-			});
-
-			paintQueued(queued);
-			refreshQueueCount(state.ui.shadow);
-			relist();
-		};
-
-		holder.querySelector(".app-head-hide").onclick = async () => {
-			const hiddenKey = hiddenStoryKey(story);
-
-			await mutateHiddenStories((entries) => addHiddenStory(entries, story));
-			relist();
-			showToast("Article hidden from front pages", {
-				action: {
-					label: "undo",
-					onAct: () => {
-						mutateHiddenStories((entries) => removeHiddenStory(entries, hiddenKey))
-							.then(relist)
-							.catch(console.error);
-					},
-				},
-			});
-		};
-
 		refreshFavoriteControls().catch(console.error);
+	}
+
+	function setAppViewMenuOpen(open) {
+		const shadow = appState?.ui.shadow;
+		const menu = shadow?.querySelector("#app-view-menu");
+		const toggle = shadow?.querySelector("#app-view-toggle");
+
+		if (!menu || !toggle) {
+			return;
+		}
+
+		const show = Boolean(open) && !toggle.hidden;
+
+		menu.hidden = !show;
+		shadow.querySelector("#app-view-arrow")?.toggleAttribute("hidden", !show);
+		toggle.setAttribute("aria-expanded", String(show));
+		toggle.classList.toggle("is-open", show);
+
+		if (show) {
+			placeAppViewMenu();
+		}
+	}
+
+	function placeAppViewMenu() {
+		const shadow = appState?.ui.shadow;
+		const menu = shadow?.querySelector("#app-view-menu");
+		const toggle = shadow?.querySelector("#app-view-toggle");
+		const pane = shadow?.querySelector("#app-article");
+
+		if (!menu || menu.hidden || !toggle || !pane) {
+			return;
+		}
+
+		const box = toggle.getBoundingClientRect();
+		const room = pane.getBoundingClientRect();
+		const width = menu.offsetWidth;
+		const left = Math.min(
+			Math.max(box.left + box.width / 2 - width / 2, room.left + 8),
+			room.right - width - 8,
+		);
+
+		const arrow = shadow.querySelector("#app-view-arrow");
+
+		menu.style.left = `${Math.round(left)}px`;
+		menu.style.top = `${Math.round(box.bottom + 9)}px`;
+
+		if (arrow) {
+			arrow.style.left = `${Math.round(box.left + box.width / 2 - 5)}px`;
+			arrow.style.top = `${Math.round(box.bottom + 4)}px`;
+		}
 	}
 
 	function paintAppArticleHead(url, title) {
@@ -26381,7 +27900,13 @@ ${settingsPanelHTML()}
 		const open = shadow.querySelector("#app-article-open");
 
 		paintAppArticleActions();
-		shadow.querySelector(".app-zoom").hidden = !url;
+		shadow.querySelector("#app-view-toggle").hidden = !url;
+
+		if (!url) {
+			setAppViewMenuOpen(false);
+		}
+
+		shadow.querySelector("#app-article-tools-sep").hidden = !url;
 		open.href = url || "";
 		open.hidden = !url;
 	}
@@ -26441,6 +27966,8 @@ ${settingsPanelHTML()}
 			helloTimer: 0,
 			graceTimer: 0,
 			capTimer: 0,
+			contentWidth: 0,
+			fitSteps: 0,
 		};
 
 		state.article = article;
@@ -26469,6 +27996,9 @@ ${settingsPanelHTML()}
 			if (article.loads > 1) {
 				article.reply = null;
 				article.origin = null;
+				article.contentWidth = 0;
+				article.fitSteps = 0;
+				paintAppFrameFit(article);
 
 				if (article.everReplied) {
 					article.probe = { ok: false, refused: false, pdf: false, readerChars: 0 };
@@ -26486,6 +28016,35 @@ ${settingsPanelHTML()}
 		pane.appendChild(frame);
 		startAppHello(article);
 		article.capTimer = setTimeout(() => tickAppArticle(article), APP_FRAME_CAP_MS);
+	}
+
+	function fitAppFrame(article, width, view) {
+		if (!(width > 0) || !(view > 0)) {
+			return;
+		}
+
+		if (width > view + 1 && article.fitSteps < APP_FRAME_FIT_STEPS) {
+			article.contentWidth = Math.max(article.contentWidth, width);
+			article.fitSteps += 1;
+		}
+
+		paintAppFrameFit(article);
+	}
+
+	function paintAppFrameFit(article = appState?.article) {
+		const frame = article?.frame;
+		const pane = frame?.parentElement;
+
+		if (!pane) {
+			return;
+		}
+
+		const zoom = Number(appState.ui.shadow.host.style.getPropertyValue("--app-zoom")) || 1;
+		const fit = article.contentWidth
+			? Math.min(1, Math.max(APP_FRAME_MIN_FIT, pane.clientWidth / zoom / article.contentWidth))
+			: 1;
+
+		frame.style.setProperty("--app-frame-fit", String(Math.floor(fit * 1000) / 1000));
 	}
 
 	function startAppHello(article) {
@@ -26795,6 +28354,11 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		if (data.type === "size") {
+			fitAppFrame(article, Number(data.width), Number(data.view));
+			return;
+		}
+
 		if (data.type === "annotated") {
 			receiveFrameGroups(data.groups);
 			return;
@@ -27073,6 +28637,67 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	let frameSizeWatched = false;
+
+	function frameContentWidth() {
+		const root = document.documentElement;
+		const body = document.body;
+		const rootOverflow = getComputedStyle(root).overflowX;
+		const overflow = rootOverflow === "visible" && body ? getComputedStyle(body).overflowX : rootOverflow;
+		const clipped = overflow === "hidden" || overflow === "clip";
+		const gutter = Math.max(0, window.innerWidth - root.clientWidth);
+
+		return Math.ceil(
+			Math.max(
+				root.getBoundingClientRect().width,
+				body ? body.getBoundingClientRect().width : 0,
+				clipped ? 0 : root.scrollWidth,
+			) + gutter,
+		);
+	}
+
+	function watchFrameSize() {
+		if (frameSizeWatched) {
+			return;
+		}
+
+		frameSizeWatched = true;
+
+		let last = "";
+		let queued = 0;
+
+		const report = () => {
+
+			const width = frameContentWidth();
+			const view = window.innerWidth;
+
+			if (`${width}x${view}` === last) {
+				return;
+			}
+
+			last = `${width}x${view}`;
+			postToApp({ type: "size", width, view });
+		};
+		const soon = () => {
+			clearTimeout(queued);
+			queued = setTimeout(report, APP_FRAME_SETTLE_MS);
+		};
+
+		report();
+		window.addEventListener("resize", soon);
+		window.addEventListener("load", soon);
+
+		if (typeof ResizeObserver === "function") {
+			const observer = new ResizeObserver(soon);
+
+			observer.observe(document.documentElement);
+
+			if (document.body) {
+				observer.observe(document.body);
+			}
+		}
+	}
+
 	function installFrameAgent() {
 		frameAgentActive = true;
 
@@ -27096,6 +28721,7 @@ ${settingsPanelHTML()}
 					title: pageTitle(),
 					visible: frameVisibility(),
 				});
+				watchFrameSize();
 				return;
 			}
 
@@ -27199,6 +28825,9 @@ ${settingsPanelHTML()}
 	const APP_HELLO_MS = 200;
 	const APP_LOAD_GRACE_MS = 600;
 	const APP_FRAME_CAP_MS = 8000;
+	const APP_FRAME_FIT_STEPS = 4;
+	const APP_FRAME_MIN_FIT = 0.5;
+	const APP_FRAME_SETTLE_MS = 250;
 	const READER_MIN_CHARS = 400;
 
 	function parseResponseHeaders(text) {
